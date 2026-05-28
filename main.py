@@ -206,8 +206,29 @@ def cmd_calibrate(config: dict, interactive: bool = False,
         list_profiles()
 
 
-def cmd_auto(config: dict, count: int = 0, infinite: bool = False):
+def cmd_auto(config: dict, count: int = 0, infinite: bool = False, combo: str = ""):
     """启动冲榜模式: 自动连续打歌。"""
+    if combo:
+        # 歌单模式
+        from combo_player import ComboPlayer
+        song_count = 0 if infinite else count
+        player = ComboPlayer(config, combo_name=combo, song_count=song_count)
+
+        print()
+        print("  ╔══════════════════════════════════╗")
+        print(f"  ║   PJSK — {player.combo.name:<17} ║")
+        print("  ╚══════════════════════════════════╝")
+        print()
+        print(f"  歌单: {player.combo.description}")
+        print(f"  曲目: {len(player.combo)} 首")
+        print(f"  目标: {'无限' if infinite else f'{count} 首'}")
+
+        if not combo:
+            print()
+            input("  按 Enter 开始...")
+        player.start()
+        return
+
     from auto_play import BatchPlayer
 
     if infinite:
@@ -449,9 +470,16 @@ def main():
         help="无限循环 (直到手动停止)"
     )
     auto_parser.add_argument(
+        "--combo", default="",
+        help="歌单名称 (combos/ 目录下的歌单, 如 grind-single)"
+    )
+    auto_parser.add_argument(
         "--profile", default="",
         help="使用指定配置档案"
     )
+
+    # combos
+    sub.add_parser("combos", help="列出可用歌单")
 
     args = parser.parse_args()
 
@@ -490,6 +518,20 @@ def main():
         wizard.run()
         return
 
+    # combos 不需要加载配置
+    if args.command == "combos":
+        from combo_player import ComboPlayer
+        cp = ComboPlayer({})
+        combos = cp.list_combos()
+        print("📁 可用歌单:")
+        print()
+        for c in combos:
+            print(f"  {c['key']:20s}  {c['name']} ({c['songs']} 首)")
+            if c['description']:
+                print(f"  {'':20s}  {c['description']}")
+            print()
+        return
+
     # 加载配置 (支持 profile)
     config = load_config(args.config, getattr(args, 'profile', ''))
 
@@ -500,7 +542,7 @@ def main():
     if args.command == "start":
         cmd_start(config)
     elif args.command == "auto":
-        cmd_auto(config, count=args.count, infinite=args.infinite)
+        cmd_auto(config, count=args.count, infinite=args.infinite, combo=args.combo)
     elif args.command == "calibrate":
         cmd_calibrate(config, interactive=args.interactive,
                       profile=args.profile)

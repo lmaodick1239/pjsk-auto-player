@@ -1,0 +1,34 @@
+{
+  "doc": "PJSK 冲榜歌单 (Combo) 定义",
+  "version": "1",
+
+  "grind-master": {
+    "name": "Master 冲榜",
+    "description": "MASTER 难度冲榜套餐",
+    "difficulty": "master",
+    "songs": [
+      {"id": "dftn", "name": "ドクター＝ファンクビート", "difficulty": "master", "level": 31},
+      {"id": "kanade", "name": "カナデトモスソラ", "difficulty": "master", "level": 30}
+    ]
+  },
+
+  "grind-expert": {
+    "name": "Expert 冲榜",
+    "description": "EXPERT 难度冲榜套餐",
+    "difficulty": "expert",
+    "songs": [
+      {"id": "envy", "name": "エンヴィーベイビー", "difficulty": "expert", "level": 26},
+      {"id": "king", "name": "KING", "difficulty": "expert", "level": 27}
+    ]
+  },
+
+  "grind-single": {
+    "name": "单曲循环",
+    "description": "重复当前已选择的歌曲 (手动选歌后启动)",
+    "difficulty": "any",
+    "repeat": true,
+    "songs": [
+      {"id": "current", "name": "当前歌曲", "difficulty": "any"}
+    ]
+  }
+}
