@@ -411,6 +411,13 @@ def main():
     # minitouch-setup
     sub.add_parser("minitouch-setup", help="下载并配置 minitouch 二进制")
 
+    # setup
+    setup_parser = sub.add_parser("setup", help="设置向导: 一键检测设备 + 校准 + 配置")
+    setup_parser.add_argument(
+        "--auto", action="store_true",
+        help="自动模式 (无需交互)"
+    )
+
     # auto (冲榜模式)
     auto_parser = sub.add_parser("auto", help="冲榜模式: 自动连续打歌")
     auto_parser.add_argument(
@@ -446,6 +453,12 @@ def main():
     if args.command == "minitouch-setup":
         from adb_controller import ADBController
         cmd_minitouch_setup({})
+        return
+
+    if args.command == "setup":
+        from setup_wizard import SetupWizard
+        wizard = SetupWizard(auto=args.auto)
+        wizard.run()
         return
 
     # 加载配置 (支持 profile)

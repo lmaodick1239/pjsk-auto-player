@@ -390,6 +390,25 @@ class AutoPlayer:
 
         return True
 
+    def _try_reconnect(self) -> bool:
+        """尝试重连 ADB 设备。"""
+        try:
+            # 等待设备重新连接
+            logger.info("等待设备重连...")
+            for _ in range(10):
+                if self.adb.is_connected():
+                    logger.info("设备已重连")
+                    # 重新初始化 minitouch
+                    mt_cfg = self.cfg.get("minitouch", {})
+                    if mt_cfg.get("auto_init", True):
+                        self.adb.init_minitouch()
+                    return True
+                time.sleep(0.5)
+            return False
+        except Exception as e:
+            logger.debug(f"重连异常: {e}")
+            return False
+
     # ──────────────────────────────────────────
     # 主循环
     # ──────────────────────────────────────────
@@ -420,10 +439,18 @@ class AutoPlayer:
             frame = self.adb.screencap()
             if frame is None:
                 self._stats["misses"] += 1
-                if self._stats["misses"] > 10:
-                    logger.error("连续 10 次截图失败, 停止")
+                if self._stats["misses"] >= 3:
+                    # 自动重连
+                    logger.info(f"截图失败 ({self._stats['misses']}次), 尝试重连...")
+                    if self._try_reconnect():
+                        logger.info("重连成功")
+                        self._stats["misses"] = 0
+                    else:
+                        logger.warning("重连失败, 继续尝试...")
+                if self._stats["misses"] > 15:
+                    logger.error("连续 15 次截图失败, 停止")
                     break
-                time.sleep(0.05)
+                time.sleep(0.3)
                 continue
 
             self._stats["misses"] = 0
