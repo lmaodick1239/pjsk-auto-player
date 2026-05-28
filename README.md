@@ -12,6 +12,7 @@
 | **v3.4.0** 🆕 | 交互式设置向导 + 自动重连 + 终端 UI 优化 |
 | **v3.3.0** | ALAS 式场景分类 + 30-60 FPS scrcpy PPM 后端 + 帧差跳过 + 区域截取 |
 | **v3.2.0** | Web 仪表盘 + Minitouch 一键下载 + PyInstaller 打包 + CI 自动构建 |
+| **v3.1.0** | Minitouch 低延迟触摸 + OCR 积分读取 + Pipeline 子任务弹窗处理 |
 | **v3.0.0** | MAA 启发式流水线引擎 + JSON 任务定义 + 模板匹配 |
 | **v2.0.0** | 冲榜模式: 自动连续打歌 + 结算画面导航 + 会话统计 |
 | **v1.0.0** | 预测引擎 + 热键控制 + 自动校准 + 配置档案 + scrcpy 后端 |
@@ -401,14 +402,17 @@ pip install pyinstaller
 
 ### 自动构建 (GitHub Actions)
 
-每次推送 `v*` tag 到 GitHub 时, CI 自动构建三平台可执行并发布到 Releases:
+每次推送到 `main` 分支时, CI 自动构建三平台可执行文件并上传为构建产物。
+从 [Actions 页面](https://github.com/WeatherWind/pjsk-auto-player/actions) 可下载最新构建。
+
+推送 `v*` tag 时, 自动创建 **GitHub Release** 并附带可执行文件:
 
 ```bash
-git tag v3.2.0
+git tag v3.4.0
 git push origin main --tags
 ```
 
-前往 https://github.com/WeatherWind/pjsk-auto-player/releases 下载。
+前往 https://github.com/WeatherWind/pjsk-auto-player/releases 下载稳定版本。
 
 ---
 
