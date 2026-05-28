@@ -13,6 +13,7 @@ import logging
 import time
 import sys
 import os
+import json
 from typing import Optional
 
 import numpy as np
@@ -959,6 +960,9 @@ class BatchPlayer:
         self._running = True
         self._batch_stats["start_time"] = time.time()
 
+        # 初始化 Web 仪表盘状态文件
+        self._write_stats()
+
         count_label = f"{self.target_count} 首" if self.target_count > 0 else "无限"
         logger.info("=" * 50)
         logger.info("🔥 PJSK 冲榜模式 已启动!")
@@ -1265,6 +1269,51 @@ class BatchPlayer:
                         f"{self._batch_stats['total_frames']/self._batch_stats['total_game_time']:.1f}"
                         if self._batch_stats['total_game_time'] > 0 else "")
         logger.info("─" * 40)
+
+    def _write_stats(self):
+        """写入冲榜状态供 Web 仪表盘读取。"""
+        stats_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), ".batch_stats.json"
+        )
+        now = time.time()
+        elapsed = now - self._batch_stats.get("start_time", now)
+        played = self._batch_stats.get("songs_played", 0)
+
+        stats = {
+            "running": self._running,
+            "songs_played": played,
+            "songs_failed": self._batch_stats.get("songs_failed", 0),
+            "target": self.target_count,
+            "elapsed_seconds": round(elapsed),
+            "avg_song_time": round(self._batch_stats["total_game_time"] / played, 1)
+                if played > 0 else 0,
+            "fps": round(self.player._stats.get("fps", 0), 1),
+            "latency_comp_ms": self.player.latency_comp,
+            "total_taps": self._batch_stats.get("total_taps", 0),
+            "total_flicks": self._batch_stats.get("total_flicks", 0),
+            "total_holds": self._batch_stats.get("total_holds", 0),
+            "total_frames": self._batch_stats.get("total_frames", 0),
+            "log": self._get_recent_log(),
+            "version": "3.1.0",
+        }
+        try:
+            with open(stats_file, "w") as f:
+                json.dump(stats, f)
+        except OSError:
+            pass
+
+    def _get_recent_log(self) -> str:
+        """获取最近的日志文本 (最后 5 行)。"""
+        import io
+        try:
+            # 从 logger 的 StreamHandler 获取
+            for handler in logging.getLogger().handlers:
+                if hasattr(handler, 'stream') and hasattr(handler.stream, 'getvalue'):
+                    lines = handler.stream.getvalue().strip().split("\n")
+                    return "\n".join(lines[-10:])
+        except Exception:
+            pass
+        return ""
 
     def _cleanup(self):
         """清理资源。"""

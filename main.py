@@ -223,6 +223,53 @@ def cmd_auto(config: dict, count: int = 0, infinite: bool = False):
     player.start()
 
 
+def cmd_web(config: dict, port: int = 8080, bind: str = "0.0.0.0"):
+    """启动 Web 仪表盘。"""
+    from web_dashboard import run_server
+    run_server(host=bind, port=port)
+
+
+def cmd_minitouch_setup(config: dict):
+    """下载并配置 minitouch 二进制。"""
+    import subprocess
+    from adb_controller import ADBController
+
+    print("🔧 Minitouch 设置工具")
+    print("=" * 40)
+
+    adb = ADBController(config)
+
+    # 检测设备架构
+    arch = adb._get_device_arch()
+    if not arch:
+        print("❌ 无法检测设备架构, 请确保设备已连接")
+        return
+    print(f"📱 设备架构: {arch}")
+
+    # 创建二进制目录
+    bin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", "minitouch")
+    os.makedirs(bin_dir, exist_ok=True)
+
+    # 下载 URL
+    url = (f"https://github.com/DeviceFarmer/minitouch/releases/"
+           f"latest/download/minitouch-{arch}")
+
+    print(f"📥 下载: {url}")
+    try:
+        import urllib.request
+        urllib.request.urlretrieve(url, os.path.join(bin_dir, f"minitouch_{arch}"))
+        print("✅ 下载成功")
+    except Exception as e:
+        print(f"❌ 下载失败: {e}")
+        print("   请手动下载: https://github.com/DeviceFarmer/minitouch/releases")
+        return
+
+    # 设置执行权限
+    os.chmod(os.path.join(bin_dir, f"minitouch_{arch}"), 0o755)
+    print("✅ minitouch 已就绪, 路径: bin/minitouch/minitouch_{arch}")
+    print("   启动打歌时自动推送和使用")
+
+
 def cmd_test(config: dict, loop: bool = False):
     """测试 ADB 连接和截图。"""
     from adb_controller import ADBController
@@ -350,6 +397,20 @@ def main():
     # profiles
     sub.add_parser("profiles", help="列出配置档案")
 
+    # web dashboard
+    web_parser = sub.add_parser("web", help="启动 Web 仪表盘 (手机端监控)")
+    web_parser.add_argument(
+        "--port", type=int, default=8080,
+        help="端口 (默认: 8080)"
+    )
+    web_parser.add_argument(
+        "--bind", default="0.0.0.0",
+        help="绑定地址 (默认: 0.0.0.0)"
+    )
+
+    # minitouch-setup
+    sub.add_parser("minitouch-setup", help="下载并配置 minitouch 二进制")
+
     # auto (冲榜模式)
     auto_parser = sub.add_parser("auto", help="冲榜模式: 自动连续打歌")
     auto_parser.add_argument(
@@ -374,6 +435,17 @@ def main():
     # profiles 命令不需要加载配置
     if args.command == "profiles":
         list_profiles()
+        return
+
+    # web 和 minitouch-setup 不需要配置
+    if args.command == "web":
+        from web_dashboard import run_server
+        run_server(host=args.bind, port=args.port)
+        return
+
+    if args.command == "minitouch-setup":
+        from adb_controller import ADBController
+        cmd_minitouch_setup({})
         return
 
     # 加载配置 (支持 profile)
