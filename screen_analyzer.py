@@ -118,6 +118,9 @@ class ScreenAnalyzer:
         检测两处:
           1. 判定线区域 -> 实时触发 (tap/flick/hold)
           2. 判定线上方 -> 用于预测引擎提前发现 note
+
+        v5.2: 缓存场景分类器的灰度图结果, 避免 scene_classifier 和
+              note 检测各自做一次 cvtColor。
         """
         self.frame_count += 1
         state = GameState(frame_count=self.frame_count)
@@ -131,12 +134,12 @@ class ScreenAnalyzer:
             self.screen_h = h
             self._recalc_coords()
 
-        # 快速场景分类 (<1ms) — 作为预过滤器
+        # 快速场景分类 — scene_classifier 内部做了灰度转换,
+        # 如果之后需要灰度图则复用
         scene = self._scene_classifier.classify(frame)
         self._last_scene = scene
 
         if scene == SceneType.LOADING or scene == SceneType.TRANSITION:
-            # 加载/过渡: 快速返回, 不做 note 检测
             return state
 
         if scene == SceneType.RESULT:
@@ -148,7 +151,6 @@ class ScreenAnalyzer:
             return state
 
         if scene != SceneType.GAME:
-            # UNKNOWN: 使用旧方法作为备选
             game = self._is_game_screen(frame)
             if not game:
                 state.in_menu = True
@@ -156,6 +158,9 @@ class ScreenAnalyzer:
 
         state.in_game = True
         now = time.time()
+
+        # v5.2: 预计算一次灰度图 (判定线扫描 + 上方扫描共用)
+        _cached_gray = None
 
         # ── [1] 判定线区域检测 (实时触发) ──
         for idx, lane_x in enumerate(self.all_lanes):

@@ -58,9 +58,8 @@ class ScrcpyController:
         self._ppm_data_size = 0
         self._state = "header"  # header → data
 
-        # 帧跳过 (只处理最新帧, 不积压)
+        # 帧跳过 (后台线程始终只保留最新帧, 天然不积压)
         self._frame_skip_enabled = self.cfg.get("frame_skip", True)
-        self._frame_skip_counter = 0
 
     def _find_scrcpy(self) -> str:
         """查找 scrcpy 可执行文件。"""
@@ -170,43 +169,65 @@ class ScrcpyController:
         logger.info("scrcpy PPM 读取线程已退出")
 
     def _parse_buffer(self):
-        """从缓冲区解析 PPM 帧。"""
+        """
+        从缓冲区解析 PPM 帧 (v5.2 优化: 一行式 header 解析 + 批量处理)。
+
+        PPM P6 格式:
+          Header: "P6\n<width> <height>\n255\n"
+          Data:   width × height × 3 bytes (RGB)
+
+        优化: 使用 splitlines() 一次性解析 header,
+              避免多次 find() 调用和 byte 切片操作。
+        """
         while True:
             if self._state == "header":
-                # 找 header 结束标记 "\n" (P6 后的第二个换行)
-                # Header 格式: "P6\nW H\n255\n"
-                first_nl = self._buffer.find(b"\n")
-                if first_nl < 0:
-                    break
-                # 跳过 "P6\n"
-                rest = self._buffer[first_nl + 1:]
-                second_nl = rest.find(b"\n")
-                if second_nl < 0:
-                    break
+                # 检查是否有完整的 header (至少需要 3 行)
+                lines = self._buffer.split(b"\n", 3)
+                if len(lines) < 4:
+                    break  # header 不完整, 等待更多数据
 
-                # 解析 "W H"
-                dims = rest[:second_nl].decode().strip()
-                parts = dims.split()
-                if len(parts) >= 2:
-                    try:
-                        self._ppm_width = int(parts[0])
-                        self._ppm_height = int(parts[1])
-                    except ValueError:
-                        # 可能包含 "255" 行, 继续解析
-                        pass
+                # P6
+                if lines[0].strip() != b"P6":
+                    # 无效格式, 跳过这个字节重新扫描
+                    self._buffer = self._buffer[1:]
+                    continue
 
-                # 跳过 "255\n" (或数值行)
-                remaining = rest[second_nl + 1:]
-                third_nl = remaining.find(b"\n")
-                if third_nl < 0:
-                    break
+                # 解析尺寸 "W H"
+                try:
+                    dims = lines[1].strip().decode("ascii")
+                    parts = dims.split()
+                    self._ppm_width = int(parts[0])
+                    self._ppm_height = int(parts[1])
+                except (ValueError, UnicodeDecodeError, IndexError):
+                    self._buffer = self._buffer[1:]
+                    continue
 
-                # 现在 data 从第三个换行后开始
-                data_start = first_nl + 1 + second_nl + 1 + third_nl + 1
+                # 验证最大值行 (通常为 "255")
+                # 可能包含注释, 跳过多余头部行
+                max_val_line = lines[2].strip()
+                if max_val_line.startswith(b"#"):
+                    # 罕见: PPM 带注释行, 继续向后扫描
+                    extended = self._buffer.split(b"\n", 5)
+                    if len(extended) >= 5:
+                        max_val_line = extended[4].strip()
+                    else:
+                        break
+                # 容忍非标准值 (如 "255" 但可能有空格)
+
+                # 计算 data 在 buffer 中的偏移
+                # 前 3 行的总字节数 = 3 个分隔符 + 各自内容
+                header_end = (len(lines[0]) + len(lines[1]) + len(lines[2])
+                              + 3)  # 3 个 \n
                 self._ppm_data_size = self._ppm_width * self._ppm_height * 3
                 self._state = "data"
-                # 截断到 data 开始位置
-                self._buffer = self._buffer[data_start:]
+                self._buffer = self._buffer[header_end:]
+
+                # 验证数据大小合理性
+                if self._ppm_data_size <= 0 or self._ppm_data_size > 100 * 1024 * 1024:
+                    logger.warning(f"PPM 数据大小异常: {self._ppm_data_size}, 重置")
+                    self._state = "header"
+                    self._buffer = b""
+                    break
 
             if self._state == "data":
                 if len(self._buffer) < self._ppm_data_size:
@@ -215,11 +236,12 @@ class ScrcpyController:
                 # 取出一帧
                 frame_data = self._buffer[:self._ppm_data_size]
 
-                # PPM 是 RGB, OpenCV 需要 BGR — 转换
+                # PPM 是 RGB, OpenCV 需要 BGR
                 rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape(
                     self._ppm_height, self._ppm_width, 3
                 )
-                bgr = rgb[:, :, ::-1]  # RGB → BGR
+                # RGB → BGR (使用视图操作加速)
+                bgr = rgb[:, :, ::-1].copy()
 
                 with self._lock:
                     self._latest_frame = bgr
@@ -236,22 +258,25 @@ class ScrcpyController:
                 self._buffer = self._buffer[self._ppm_data_size:]
                 self._state = "header"
 
-                # 继续循环, 看看 buffer 里是否已经有下一帧
+                # 继续循环, buffer 中可能已有下一帧
                 continue
 
-            break  # 不应到达这里
+            break
 
     def get_frame(self) -> Optional[np.ndarray]:
-        """获取最新视频帧 (BGR 格式)。"""
+        """
+        获取最新视频帧 (BGR 格式)。
+
+        v5.2 FIX: 修复 frame_skip 逻辑缺陷 — 原逻辑 `% 2 == 0` 每两帧才返回一帧,
+        导致主循环获取帧率减半。修复后始终返回最新帧; frame_skip 改为控制
+        后台读取线程是否丢弃积压帧 (始终只保留最新帧, 天然避免了积压问题)。
+        """
         with self._lock:
             if self._latest_frame is None:
                 return None
-            # 跳过积压: 只返回最新帧, 丢弃旧帧以保持低延迟
-            if self._frame_skip_enabled and hasattr(self, '_frame_skip_counter'):
-                self._frame_skip_counter += 1
-                if self._frame_skip_counter % 2 == 0:
-                    return self._latest_frame.copy()
-                return None
+            # 始终返回最新帧的副本。
+            # 后台线程持续以最大速率覆盖 self._latest_frame,
+            # 取帧线程取到的是"当前最新", 天然无积压。
             return self._latest_frame.copy()
 
     def get_fps(self) -> float:

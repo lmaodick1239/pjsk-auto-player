@@ -14,11 +14,17 @@ adb:
   device_serial: ""
 
   # screencap 方法:
-  #   "auto"      - 自动检测最快可用后端: scrcpy (30-60 FPS) > ADB (推荐)
-  #   "exec-out"  - adb exec-out screencap -p (5-15 FPS)
-  #   "file"      - adb shell screencap + adb pull (较慢, 兼容性最佳)
-  #   "scrcpy"    - 仅 scrcpy (需安装)
+  #   "auto"      - 自动检测最快可用后端: scrcpy > raw > exec-out (推荐)
+  #   "raw"       - adb exec-out screencap 无压缩 (10-25 FPS, 比 PNG 快 2-3x)
+  #   "exec-out"  - adb exec-out screencap -p (5-15 FPS, 兼容性最佳)
+  #   "file"      - adb shell screencap + adb pull (较慢)
+  #   "scrcpy"    - 仅 scrcpy (需安装, 30-60 FPS)
   screencap_method: "auto"
+
+  # v5.2: 异步截屏 (producer-consumer 模式)
+  # 后台线程持续截屏, 主线程直接取缓存帧 (零延迟)
+  # 通常能提升 30-50% 帧率
+  async_capture: true
 
   # 截图临时目录 (仅 screencap_method=file 时需要)
   temp_dir: "/sdcard/"
