@@ -321,6 +321,16 @@ class CombinedController(BaseController):
                     pass
             return self._screen_width, self._screen_height
 
+    def shell(self, command: str) -> bool:
+        """Execute shell command via the active backend."""
+        with self._lock:
+            if self._active_backend and hasattr(self._active_backend, 'shell'):
+                try:
+                    return self._active_backend.shell(command)
+                except Exception as e:
+                    logger.error("Backend '%s' shell error: %s", self._active_name, e)
+            return False
+
     # ── Metadata ───────────────────────────────────────────────
 
     def get_performance_stats(self) -> dict:

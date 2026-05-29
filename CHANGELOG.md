@@ -5,6 +5,18 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [4.9.1] - 2026-05-29
+
+### 🔧 Bugfix & Integration Round
+
+- **`WebApp` 参数匹配**: `__init__` 新增 `profile`/`app` 参数, 支持 `PjskApp` 实例引用来获取完整运行状态
+- **`SceneClassifier` 配置注入**: 接受 `config` 参数, `judgment_line_y` 从配置读取而非硬编码
+- **`BaseController.tap()` 别名**: 新增 `tap()` → `click()` 别名, 统一 Pipeline V2 与 Controller 接口
+- **`app_start`/`app_stop`/`shell` 接口**: 在 `BaseController` / `ADBController` / `CombinedController` 实现设备 Shell 命令执行
+- **自动恢复策略实现**: `_handle_error` 实现 6 种恢复策略 (restart_app / force_restart / navigate_back / wait_reconnect / skip_task / retry)
+- **`calibrate()` 导入修复**: 从 `auto_play.Calibrator` 直接导入, 移除不存在的 `lib.auto_play` 路径
+- **CLAUDE.md**: 新增 AI 助手指南, 覆盖架构、命令、设计模式
+
 ## [4.9.0] - 2026-05-29
 
 ### 🏗️ 一站式重构: MAA/ALAS/MaaFramework 融合架构

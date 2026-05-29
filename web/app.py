@@ -230,6 +230,8 @@ class WebHandler(BaseHTTPRequestHandler):
         if _app_instance:
             s["current_task"] = getattr(_app_instance, "current_task", "")
             s["mode"] = getattr(_app_instance, "mode", "")
+        elif self.app:
+            s.update(self.app.get_status())
         return s
 
     def _get_screenshot(self) -> dict:
@@ -433,12 +435,19 @@ class WebHandler(BaseHTTPRequestHandler):
             def _run_async():
                 global _app_running, _app_paused
                 try:
-                    from auto_play import BatchPlayer
-                    player = BatchPlayer(_cfg, song_count=count, mode=mode)
-                    push_log(f"🚀 启动冲榜 (mode={mode}, count={count})", "info")
-                    _app_running = True
-                    _app_paused = False
-                    player.start()
+                    # Prefer new PjskApp architecture when available
+                    if _app_instance is not None:
+                        push_log(f"🚀 启动打歌 (mode={mode}, PjskApp)", "info")
+                        _app_running = True
+                        _app_paused = False
+                        _app_instance.run(mode=mode.lower(), infinite=(count == 0))
+                    else:
+                        from auto_play import BatchPlayer
+                        player = BatchPlayer(_cfg, song_count=count, mode=mode)
+                        push_log(f"🚀 启动冲榜 (mode={mode}, count={count})", "info")
+                        _app_running = True
+                        _app_paused = False
+                        player.start()
                 except Exception as e:
                     push_log(f"❌ {e}", "error")
                 finally:
@@ -540,9 +549,11 @@ class WebHandler(BaseHTTPRequestHandler):
 class WebApp:
     """Web GUI V2 应用。"""
 
-    def __init__(self, host="0.0.0.0", port=8080):
+    def __init__(self, host="0.0.0.0", port=8080, profile="", app=None):
         self.host = host
         self.port = port
+        self.profile = profile
+        self.app = app  # PjskApp instance for status queries
         self._server: Optional[HTTPServer] = None
 
     def run(self):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PJSK Auto Player — 一站式 Project Sekai 游戏助手 (v4.9.0+)
+PJSK Auto Player — 一站式 Project Sekai 游戏助手 (v4.9.1+)
 
 基于 ADB/OpenCV/scrcpy 的自动打歌工具。
 吸收 MAA (MaaAssistantArknights) + ALAS (AzurLaneAutoScript) + MaaFramework 精华。

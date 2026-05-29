@@ -74,6 +74,46 @@ class BaseController(ABC):
         """Whether the controller is currently connected to a device."""
         return self._connected
 
+    # ── App Management ──────────────────────────────────────────
+
+    def app_start(self, package: str) -> bool:
+        """Start an app by package name.
+
+        Default implementation uses shell command.
+        Subclasses may override for faster methods.
+
+        Args:
+            package: Android package name (e.g., 'com.sega.pjsekai')
+
+        Returns:
+            True if the command was sent.
+        """
+        return self.shell(f"monkey -p {package} -c android.intent.category.LAUNCHER 1")
+
+    def app_stop(self, package: str) -> bool:
+        """Stop/kill an app by package name.
+
+        Args:
+            package: Android package name
+
+        Returns:
+            True if the command was sent.
+        """
+        return self.shell(f"am force-stop {package}")
+
+    def shell(self, command: str) -> bool:
+        """Execute a shell command on the device.
+
+        Default raises NotImplementedError — subclasses should implement.
+
+        Args:
+            command: Shell command string.
+
+        Returns:
+            True if successful.
+        """
+        raise NotImplementedError("shell() must be implemented by subclass")
+
     # ── Screencap ──────────────────────────────────────────────
 
     @abstractmethod
@@ -112,6 +152,18 @@ class BaseController(ABC):
             True if the click was sent successfully.
         """
         ...
+
+    def tap(self, x: float, y: float) -> bool:
+        """Alias for click() — convenience method.
+
+        Args:
+            x: Relative X coordinate (0~1)
+            y: Relative Y coordinate (0~1)
+
+        Returns:
+            True if the tap was sent successfully.
+        """
+        return self.click(x, y)
 
     @abstractmethod
     def swipe(self, x1: float, y1: float, x2: float, y2: float,

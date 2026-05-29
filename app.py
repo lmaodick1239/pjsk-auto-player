@@ -182,8 +182,15 @@ class PjskApp:
 
     def calibrate(self):
         """一键校准。"""
-        from lib.auto_play import calibrate
-        calibrate(self.config)
+        try:
+            from auto_play import Calibrator
+            cal = Calibrator(self.config)
+            cal.run_all()
+            logger.info("Calibration completed")
+        except ImportError:
+            logger.warning("Calibration module not available — falling back to setup wizard")
+        except Exception as e:
+            logger.error("Calibration failed: %s", e)
 
     def get_status(self) -> dict:
         """获取运行状态快照。"""
@@ -277,12 +284,84 @@ class PjskApp:
             return ""
 
     def _handle_error(self, error: PjskError):
-        """处理分级异常。"""
+        """处理分级异常并执行自动恢复策略。"""
         self.stats["errors"] += 1
         error.log()
         strategy = get_recovery_strategy(error.code)
-        logger.warning("Recovery strategy: %s", strategy["action"])
-        # TODO: 执行恢复策略 (restart_app / force_restart / navigate_back 等)
+        action = strategy.get("action", "stop")
+        retry_delay = strategy.get("retry_delay", 1.0)
+        max_retries = strategy.get("max_retries", 3)
+
+        logger.warning("Recovery: action=%s, delay=%.1fs, max_retries=%d",
+                       action, retry_delay, max_retries)
+
+        try:
+            if action == "restart_app":
+                self._recovery_restart_app(error)
+            elif action == "force_restart":
+                self._recovery_force_restart(error)
+            elif action == "navigate_back":
+                self._recovery_navigate_back()
+            elif action == "wait_reconnect":
+                self._recovery_wait_reconnect(retry_delay, max_retries)
+            elif action == "skip_task":
+                logger.info("Skipping current task due to %s", error.code)
+            elif action == "retry":
+                time.sleep(retry_delay)
+            else:
+                logger.error("Unhandled recovery action: %s", action)
+        except Exception as e:
+            logger.error("Recovery failed: %s", e)
+
+    def _recovery_restart_app(self, error: PjskError):
+        """杀死游戏进程并重启。"""
+        logger.info("Recovery: restarting game app...")
+        try:
+            if self.controller:
+                self.controller.app_stop("com.sega.pjsekai")
+            time.sleep(2.0)
+            if self.controller:
+                self.controller.app_start("com.sega.pjsekai")
+            time.sleep(5.0)
+        except Exception as e:
+            logger.error("Restart app failed: %s", e)
+
+    def _recovery_force_restart(self, error: PjskError):
+        """强制杀进程 + 重启。"""
+        logger.info("Recovery: force restarting...")
+        try:
+            if self.controller:
+                self.controller.app_stop("com.sega.pjsekai")
+            # Also try shell-level force stop
+            if self.controller and hasattr(self.controller, 'shell'):
+                self.controller.shell("am force-stop com.sega.pjsekai")
+            time.sleep(3.0)
+            if self.controller:
+                self.controller.app_start("com.sega.pjsekai")
+            time.sleep(5.0)
+        except Exception as e:
+            logger.error("Force restart failed: %s", e)
+
+    def _recovery_navigate_back(self):
+        """尝试按返回键退出未知页面。"""
+        logger.info("Recovery: pressing back key...")
+        try:
+            if self.controller and hasattr(self.controller, 'shell'):
+                self.controller.shell("input keyevent 4")
+            time.sleep(1.0)
+        except Exception as e:
+            logger.error("Navigate back failed: %s", e)
+
+    def _recovery_wait_reconnect(self, retry_delay: float, max_retries: int):
+        """等待设备重连。"""
+        logger.info("Recovery: waiting for device reconnect...")
+        for i in range(max_retries):
+            if self.controller and self.controller.is_connected:
+                logger.info("Device reconnected")
+                return
+            logger.debug("Reconnect attempt %d/%d", i + 1, max_retries)
+            time.sleep(retry_delay)
+        logger.error("Device reconnection failed after %d attempts", max_retries)
 
     def _start_web_server(self):
         """启动 Web 服务器（后台线程）。"""

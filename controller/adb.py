@@ -243,3 +243,22 @@ class ADBController(BaseController):
             logger.warning("ADB swipe(%d,%d→%d,%d) failed: %s",
                            ax1, ay1, ax2, ay2, e)
             return False
+
+    def shell(self, command: str) -> bool:
+        """Execute a shell command on the device via ADB.
+
+        Args:
+            command: Shell command string (e.g., 'input keyevent 4').
+
+        Returns:
+            True if the command executed successfully.
+        """
+        try:
+            result = subprocess.run(
+                self._adb_cmd("shell") + command.split(),
+                capture_output=True, timeout=10,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning("ADB shell command failed: %s", e)
+            return False

@@ -338,9 +338,11 @@ class SceneClassifier:
         print(result.scene_name, result.task_name, result.confidence)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, config: dict | None = None) -> None:
+        self.config = config or {}
+        judgment_line_y = self.config.get("screen", {}).get("judgment_line_y", 0.82)
         self._detectors: list[BaseDetector] = [
-            BrightnessDetector(),
+            BrightnessDetector(judgment_line_y=judgment_line_y),
             ColorDetector(),
             TemplateDetector(),
         ]
