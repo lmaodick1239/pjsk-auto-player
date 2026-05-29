@@ -507,6 +507,12 @@ class PipelineEngine:
         elif action == TaskAction.SWIPE:
             logger.debug(f"[{task.name}] Swipe")
 
+        elif action == TaskAction.TAP:
+            # 对每条判定线点击 (打歌用)
+            if self.analyzer:
+                for lx, ly in self.analyzer.get_lane_positions():
+                    self.adb.tap(lx, ly)
+
         elif action == TaskAction.WAIT:
             # 等待在 pre/post delay 中处理
             pass
@@ -515,7 +521,6 @@ class PipelineEngine:
             pass
 
     # ── 跳转决策 ──
-
     def _decide_next(self, task: TaskDef, result: TaskResult) -> str:
         """
         根据执行结果决定下一步。

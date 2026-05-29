@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [4.3.0] - 2026-05-29
+
+- **打歌模式系统**: AP (All Perfect) / FC (Full Combo) / LIVE (通关保底) 三种预设
+- **冲榜模式浮动**: 每首歌自动随机切换模式 (默认 70% FC + 25% AP + 5% LIVE)
+- **Per-lane 独立随机化**: 每个轨道独立取随机偏移, 不再是全局统一抖动
+- **`_lane_to_x` 性能缓存**: 避免每帧重算轨道坐标
+- **CLI `--mode` 参数**: `python main.py start --mode AP` 指定打歌模式
+- **热键 M**: 运行时循环切换模式 (AP → FC → LIVE)
+- **Web 仪表盘**: 打歌模式下拉选择器
+- **config.yaml**: 新增 `batch_play.mode_weights` 配置
+
 ## [3.5.0] - 2026-05-28
 
 - v3.5.0: Windows hotkeys + --version + config validation + web dashboard fix

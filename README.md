@@ -9,7 +9,8 @@
 
 | 版本 | 特性 |
 |------|------|
-| **v4.0.0** 🆕 | 纯 Web 操控 + scrcpy/minitouch 自动启用 + 原生窗口 (PyWebView) |
+| **v4.1.0** 🆕 | 打歌模式 (AP/FC/LIVE) + 模式浮动 + 点击随机化反封号 |
+| **v4.0.0** | 纯 Web 操控 + scrcpy/minitouch 自动启用 + 原生窗口 (PyWebView) |
 | **v3.9.0** | 开箱即用: ADB 自动下载 + 一键启动脚本 |
 | **v3.8.0** | MAA 风格 Web 控制台 (完整仪表盘 + 截图 + 配置编辑) |
 | **v3.7.0** | 自动编队系统 (活动/自定义编队 + 角色选择) |
@@ -23,6 +24,8 @@
 | 特性 | 说明 |
 |------|------|
 | **🎯 预测引擎** | 提前检测判定线上方的 note → 追踪滚动速度 → 计算到达时间 → 准时触发。补偿 ADB 的 100-300ms 延迟, 让纯反应式变主动式 |
+| **🎲 点击随机化** 🆕 | 模拟人类操作, 避免被封号: 时机抖动 ±15ms, 坐标偏移 ±5px, 随机漏键 0.1%, 长按时长抖动, 结算点击间隔随机化 |
+| **🎮 打歌模式** 🆕 | 三种模式: AP (All Perfect), FC (Full Combo), LIVE (通关保底)。热键 M 运行时切换, 冲榜时自动浮动 (70% FC + 25% AP + 5% LIVE) |
 | **🤏 Minitouch 后端** | 可选, 推送 minitouch 到手机后触摸延迟从 ~50ms 降到 <5ms |
 | **🏭 Pipeline 引擎** | MAA 启发式任务流水线, 游戏状态机用 JSON 配置, 支持模板匹配 + 重试策略 + 子任务 |
 | **♾️ 冲榜模式** | 自动连续打歌: 检测结算画面 → 点击跳过 → 返回选歌 → 下一首。支持 `--infinite` |
@@ -218,12 +221,16 @@ python main.py start
 运行时热键:
 | 键 | 功能 |
 |----|------|
+| **M** | 切换打歌模式 (AP → FC → LIVE → 循环) |
 | **P** | 暂停/继续 |
 | **Q** | 退出 |
 | **+** / **=** | 延迟补偿 +5ms |
 | **-** / **_** | 延迟补偿 -5ms |
 | **>** / **.** | 亮度阈值 +5 |
 | **<** / **,** | 亮度阈值 -5 |
+| **[** | 时机抖动 -3ms (降到 0 则禁用抖动) |
+| **]** | 时机抖动 +3ms (自动启用随机化) |
+| **\\** | 切换随机化 启用/禁用 |
 
 ### ♾️ 冲榜模式
 
@@ -362,12 +369,15 @@ engine.save_template("start_button.png", frame, roi=[100,200,50,30])
 ## 命令行参考
 
 ```bash
-python main.py start                         # 自动打歌
+python main.py start                         # 自动打歌 (默认 FC 模式)
+python main.py start --mode AP               # AP 模式 (All Perfect)
+python main.py start --mode LIVE             # LIVE 模式 (通关保底)
 python main.py start --profile expert        # 使用配置档案
 
-python main.py auto                          # 冲榜模式 (5首)
-python main.py auto -n 20                   # 冲榜模式 (20首)
+python main.py auto                          # 冲榜模式 (5首, 模式浮动)
+python main.py auto -n 20                    # 冲榜模式 (20首)
 python main.py auto --infinite               # 无限冲榜
+python main.py auto --mode AP                # 冲榜基础模式 (浮动中心)
 python main.py auto --profile phone2         # 使用档案
 
 python main.py calibrate                     # 自动校准
@@ -494,6 +504,70 @@ pjsk-auto-player/
 2. **亮度阈值**: 漏 note 就降低阈值, 误触就提高 (热键 `</>`)
 3. **延迟补偿**: 运行 `test` 看实际延迟, `+`/`-` 热键实时调整
 4. **预测引擎**: 默认启用, 如不需要可设置 `prediction.enabled: false`
+5. **点击随机化**: 默认启用, 首次 `[`/`]` 热键可以微调时机抖动幅度
+
+### 🎲 点击随机化 (反封号)
+
+自动打歌的最大封号风险在于**机器般的精确性** —— 每次点击都在完全相同的时间、完全相同的位置触发。随机化功能通过模拟人类操作的不精确性来降低风险:
+
+| 随机化维度 | 默认值 | 说明 |
+|-----------|--------|------|
+| ⏱ **时机抖动** | ±15ms | 在预测引擎计算的触发时间上随机偏移, 模拟人类反应速度波动。PJSK 判定窗口: PERFECT ±25ms, GREAT ±50ms, 所以 ±15ms 大部分落在 PERFECT 内 |
+| 📍 **坐标抖动** | ±5px | 每次点击位置随机偏移几像素, 模拟手指落点不完全精确 |
+| 💤 **随机漏键** | 0.1% | 大约每 1000 个 note 漏 1 个, 模拟人类偶尔的失误。设置为 0 可关闭 |
+| 👆 **长按时长抖动** | ±30ms | 长按时随机增减速续时间, 避免每次都按相同的长度 |
+| 📊 **结算间隔抖动** | ±0.8s | 跳过结算画面时随机化点击间隔, 避免每次都等固定时间 |
+
+### 🎮 打歌模式 (AP / FC / LIVE)
+
+三种预设模式, 每个模式对应不同的随机化参数组合，模拟不同水平的玩家:
+
+| 模式 | 时机抖动 | 坐标抖动 | 漏键率 | 效果 |
+|------|---------|---------|-------|------|
+| **AP** (All Perfect) | ±3ms | ±2px | 0% | 所有 note PERFECT, 极致精确 |
+| **FC** (Full Combo) | ±15ms | ±5px | 0% | 不漏键, 但可能有 GREAT/GOOD |
+| **LIVE** (通关保底) | ±35ms | ±10px | 0.3% | 允许 MISS/BAD, 保底通关 |
+
+**单次打歌:** 通过 `--mode` 指定:
+```bash
+python main.py start --mode AP      # 全力 AP
+python main.py start --mode FC      # Full Combo (默认)
+python main.py start --mode LIVE    # 仅通关
+```
+
+**冲榜模式 (浮动):** 每首歌自动切换模式, 模拟人类发挥波动:
+```bash
+python main.py auto                  # 默认: 25% AP + 70% FC + 5% LIVE
+python main.py auto --mode AP        # 调整浮动中心
+```
+
+**运行中热键:** 按 `M` 循环切换 AP → FC → LIVE → AP ...
+
+**自定义权重 (config.yaml):**
+```yaml
+batch_play:
+  mode_weights:
+    AP: 25   # 25% 概率 AP
+    FC: 70   # 70% 概率 FC (默认主力)
+    LIVE: 5  # 5% 概率混入 LIVE
+```
+
+**配置方式 (config.yaml):**
+```yaml
+randomization:
+  enabled: true               # 总开关
+  timing_jitter_ms: 15        # 时机抖动 (ms)
+  position_jitter_px: 5       # 坐标抖动 (px)
+  miss_chance: 0.001          # 漏键概率 (0=关闭)
+  hold_duration_jitter_ms: 30 # 长按时长抖动 (ms)
+  result_tap_jitter: 0.8      # 结算点击间隔抖动 (秒)
+```
+
+**运行中热键调整:**
+- `M` : 循环切换打歌模式 (AP → FC → LIVE → ...)
+- `[` : 降低时机抖动 (3ms/步, 降到 0 禁用)
+- `]` : 增加时机抖动 (3ms/步, 自动启用随机化)
+- `\` : 切换随机化启用/禁用
 
 ### 多手机支持
 

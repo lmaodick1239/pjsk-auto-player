@@ -148,7 +148,7 @@ def _notify(title: str, message: str):
         pass
 
 
-def cmd_start(song_count=0, combo="", team=""):
+def cmd_start(song_count=0, combo="", team="", mode="FC"):
     """后台启动冲榜。"""
     global _app_thread, _app_running, _app_paused
     if _app_running:
@@ -158,7 +158,7 @@ def cmd_start(song_count=0, combo="", team=""):
         global _app_running, _app_paused
         try:
             from auto_play import BatchPlayer
-            p = BatchPlayer(_cfg, song_count=song_count)
+            p = BatchPlayer(_cfg, song_count=song_count, mode=mode)
             p.start()
         except Exception as e:
             log(f"❌ {e}")
@@ -239,7 +239,8 @@ class Handler(BaseHTTPRequestHandler):
                 if a == "start":
                     cmd_start(int(q.get("count", 0)),
                               q.get("combo", ""),
-                              q.get("team", ""))
+                              q.get("team", ""),
+                              q.get("mode", "FC"))
                 elif a == "stop":
                     cmd_stop()
                 elif a in ("pause", "resume"):
@@ -251,6 +252,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if path == "/api/versions":
                 return self._json(_api_versions())
+            if path == "/api/auto-speed":
+                return self._json(_api_auto_speed())
             self.send_error(404)
         except Exception as e:
             self._json({"error": str(e)})
@@ -291,7 +294,7 @@ def _api_stats():
     d = {"running": _app_running, "paused": _app_paused,
          "songs_played": 0, "target": 0, "elapsed_seconds": 0,
          "fps": 0, "total_taps": 0, "total_flicks": 0, "total_holds": 0,
-         "version": "3.9.0", "adb": _adb and _adb.is_connected() or False}
+         "version": "4.1.0", "adb": _adb and _adb.is_connected() or False}
     try:
         if os.path.exists(STATS_FILE):
             with open(STATS_FILE) as f:
@@ -367,6 +370,14 @@ def _api_status():
             pass
     return s
 
+
+def _api_auto_speed():
+    from auto_play import Calibrator
+    try:
+        cal = Calibrator(_cfg)
+        return cal.detect_game_speed(duration_s=8.0)
+    except Exception as e:
+        return {"detected": False, "message": str(e)}
 
 def _api_versions():
     import subprocess
@@ -448,7 +459,7 @@ textarea{width:100%;min-height:360px;background:#010409;border:1px solid var(--b
 </head>
 <body>
 <div class="sb">
-<div class="sbh"><h1>🎵 PJSK</h1><div class="v">v4.0.0 · 原生窗口</div></div>
+<div class="sbh"><h1>🎵 PJSK</h1><div class="v">v4.1.0 · 原生窗口</div></div>
 <div class="nav a" onclick="sp('dash')"><span>📊</span><span>仪表盘</span></div>
 <div class="nav" onclick="sp('phone')"><span>📸</span><span>手机画面</span></div>
 <div class="nav" onclick="sp('scripts')"><span>🎮</span><span>歌单&编队</span></div>
@@ -593,8 +604,13 @@ textarea{width:100%;min-height:360px;background:#010409;border:1px solid var(--b
 <div class="card"><div class="ct">启动冲榜</div>
 <div class="fr"><div class="fg"><label>歌单</label><select id="sel-combo"></select></div>
 <div class="fg"><label>编队</label><select id="sel-team"></select></div></div>
+<div class="fr"><div class="fg"><label>打歌模式</label><select id="sel-mode"><option value="FC">FC - Full Combo (默认)</option><option value="AP">AP - All Perfect</option><option value="LIVE">LIVE - 通关保底</option></select></div></div>
 <div class="fr"><div class="fg"><label>次数 (0=无限)</label><input type="number" id="inp-count" value="10" min="0"></div>
 <div class="fg"><label>&nbsp;</label><button class="btn btn-p" onclick="quickGo()" style="width:100%">🚀 一键启动</button></div></div></div>
+<div class="card"><div class="ct">自动检测</div>
+<div class="cx"><button class="btn btn-s btn-p" onclick="autoSpeed()">🎯 检测游戏速度</button>
+<button class="btn btn-s" onclick="act('calibrate')">📏 校准判定线</button></div>
+<div id="speed-result" style="font-size:12px;color:var(--td);margin-top:8px"></div></div>
 <div class="card"><div class="ct">歌单</div><div id="combo-list"></div></div>
 <div class="card"><div class="ct">编队</div><div id="team-list"></div></div>
 </div>
@@ -609,8 +625,8 @@ textarea{width:100%;min-height:360px;background:#010409;border:1px solid var(--b
 <div id="p-about" class="pg">
 <div class="card" style="text-align:center">
 <h2 style="color:var(--ac);margin-bottom:4px">🎵 PJSK Auto Player</h2>
-<p style="color:var(--td);font-size:14px">v3.9.0</p>
-<p style="color:var(--td);font-size:13px;margin:8px 0">基于 ADB+OpenCV 的 Project Sekai 自动打歌<br>完全浏览器操控 · 预测引擎 · Pipeline 流水线 · 冲榜模式</p>
+<p style="color:var(--td);font-size:14px">v4.1.0</p>
+<p style="color:var(--td);font-size:13px;margin:8px 0">基于 ADB+OpenCV 的 Project Sekai 自动打歌<br>原生桌面窗口 · 预测引擎 · Pipeline · 冲榜 · 反封号</p>
 <p style="font-size:13px"><a href="https://github.com/WeatherWind/pjsk-auto-player" target="_blank" style="color:var(--ac)">GitHub</a></p>
 <div id="vt" style="margin-top:16px;text-align:left"></div></div>
 </div>
@@ -707,10 +723,11 @@ async function loadVT(){try{
 let d=await g('/api/versions');let h='<table style="width:100%;border-collapse:collapse">';
 (d.versions||[]).forEach(v=>{h+=`<tr><td>${v.tag}</td><td style="color:var(--td)">${v.date}</td><td style="color:var(--td)">${(v.message||'').slice(0,60)}</td></tr>`});h+='</table>';document.getElementById('vt').innerHTML=h
 }catch(e){}}
-function quickGo(){let c=document.getElementById('sel-combo').value;let t=document.getElementById('sel-team').value;let n=document.getElementById('inp-count').value||0;
-let p=['/api/action?action=start'];if(c)p.push('combo='+c);if(t)p.push('team='+t);if(n>0)p.push('count='+n);fetch(p.join('&'))
+function quickGo(){let c=document.getElementById('sel-combo').value;let t=document.getElementById('sel-team').value;let n=document.getElementById('inp-count').value||0;let m=document.getElementById('sel-mode').value||'FC';
+let p=['/api/action?action=start'];if(c)p.push('combo='+c);if(t)p.push('team='+t);if(n>0)p.push('count='+n);p.push('mode='+m);fetch(p.join('&'))
 let lb=document.getElementById('log-box');lb.innerHTML='<div class="ll">🚀 启动冲榜...</div>'}
 function esc(s){let d=document.createElement('div');d.textContent=s;return d.innerHTML}
+async function autoSpeed(){let r=document.getElementById('speed-result');r.textContent='检测中...请确保在打歌界面 (约8秒)';try{let d=await g('/api/auto-speed');if(d.detected){r.innerHTML='✅ 速度: '+d.avg_velocity+' px/s<br>已自动更新 config.yaml (检测区域 + 预测窗口 + 延迟补偿)';setTimeout(()=>{loadCfg()},500)}else{r.textContent='❌ '+((d||{}).message||'检测失败, 请确保在打歌界面')}}catch(e){r.textContent='❌ 检测失败: '+e}}
 
 // ── 傻瓜模式 ──
 async function foolMode(){

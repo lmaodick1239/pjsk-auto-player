@@ -17,7 +17,6 @@ scrcpy 视频流后端 —— 通过 PPM 格式从 scrcpy 获取高帧率手机�
 
 import logging
 import os
-import struct
 import subprocess
 import sys
 import threading

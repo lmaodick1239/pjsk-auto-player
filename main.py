@@ -155,11 +155,11 @@ def setup_logging(config: dict):
 # ──────────────────────────────────────────
 
 
-def cmd_start(config: dict):
+def cmd_start(config: dict, mode: str = "FC"):
     """启动自动打歌。"""
     from auto_play import AutoPlayer
 
-    player = AutoPlayer(config)
+    player = AutoPlayer(config, mode=mode)
 
     print()
     print("  ╔══════════════════════════════════╗")
@@ -173,9 +173,10 @@ def cmd_start(config: dict):
     print("    4. 准备好进入打歌画面")
     print()
     print("  热键 (运行时):")
-    print("    P - 暂停/继续     Q - 退出")
-    print("    + - 延迟+5ms      - - 延迟-5ms")
-    print("    > - 阈值+5        < - 阈值-5")
+    print("    P - 暂停/继续     Q - 退出      M - 切换模式")
+    print("    + - 延迟+5       - - 延迟-5")
+    print("    > - 阈值+5       < - 阈值-5")
+    print("    [ - 抖动-3ms     ] - 抖动+3ms   \\ - 随机化开关")
     print()
     input("  按 Enter 开始自动打歌...")
 
@@ -205,7 +206,7 @@ def cmd_calibrate(config: dict, interactive: bool = False,
 
 
 def cmd_auto(config: dict, count: int = 0, infinite: bool = False,
-             combo: str = "", team: str = ""):
+             combo: str = "", team: str = "", mode: str = "FC"):
     """启动冲榜模式: 自动连续打歌。"""
     # 先应用编队 (如需)
     if team:
@@ -247,7 +248,7 @@ def cmd_auto(config: dict, count: int = 0, infinite: bool = False,
     else:
         song_count = count
 
-    player = BatchPlayer(config, song_count=song_count)
+    player = BatchPlayer(config, song_count=song_count, mode=mode)
 
     print()
     print("  ╔══════════════════════════════════╗")
@@ -422,6 +423,11 @@ def main():
     # start
     start_parser = sub.add_parser("start", help="启动自动打歌")
     start_parser.add_argument(
+        "--mode", default="FC",
+        choices=["AP", "FC", "LIVE"],
+        help="打歌模式: AP=AllPerfect, FC=FullCombo(默认), LIVE=通关"
+    )
+    start_parser.add_argument(
         "--profile", default="",
         help="使用指定配置档案 (profiles/<name>.yaml)"
     )
@@ -436,6 +442,10 @@ def main():
     cal_parser.add_argument(
         "--profile", default="",
         help="校准结果保存到指定配置档案"
+    )
+    cal_parser.add_argument(
+        "--speed", action="store_true",
+        help="自动检测游戏速度并调整预测参数 (额外录制 8 秒)"
     )
 
     # test
@@ -472,6 +482,11 @@ def main():
 
     # auto (冲榜模式)
     auto_parser = sub.add_parser("auto", help="冲榜模式: 自动连续打歌")
+    auto_parser.add_argument(
+        "--mode", default="FC",
+        choices=["AP", "FC", "LIVE"],
+        help="基础打歌模式 (冲榜时自动浮动: FC为主, AP/LIVE为辅)"
+    )
     auto_parser.add_argument(
         "-n", "--count", type=int, default=5,
         help="打歌次数 (默认: 5)"
@@ -571,13 +586,17 @@ def main():
 
     # 执行命令
     if args.command == "start":
-        cmd_start(config)
+        cmd_start(config, mode=args.mode)
     elif args.command == "auto":
         cmd_auto(config, count=args.count, infinite=args.infinite,
-                 combo=args.combo, team=args.team)
+                 combo=args.combo, team=args.team, mode=args.mode)
     elif args.command == "calibrate":
         cmd_calibrate(config, interactive=args.interactive,
                       profile=args.profile)
+        if args.speed:
+            from auto_play import Calibrator
+            cal = Calibrator(config)
+            cal.detect_game_speed()
     elif args.command == "test":
         cmd_test(config, loop=args.loop)
 

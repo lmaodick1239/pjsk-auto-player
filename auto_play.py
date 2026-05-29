@@ -14,6 +14,7 @@ import time
 import sys
 import os
 import json
+import random
 from typing import Optional
 
 import numpy as np
@@ -32,11 +33,40 @@ except ImportError:
 logger = logging.getLogger("pjsk_auto_play")
 
 
-class NoteTracker:
-    """
-    Note 轨迹追踪器 —— 预测引擎的核心。
+# 打歌模式预设: 每个模式对应一组随机化参数
+# 通过调整时机抖动、位置抖动和漏键率来模拟不同水平的人类玩家
+PERFORMANCE_MODES = {
+    "AP": {
+        "label": " AP (All Perfect)",
+        "description": "极致精确，所有 note PERFECT",
+        "timing_jitter_ms": 3,
+        "position_jitter_px": 2,
+        "miss_chance": 0.0,
+        "hold_duration_jitter_ms": 10,
+    },
+    "FC": {
+        "label": " FC (Full Combo)",
+        "description": "不漏键，但可能有 GREAT/GOOD",
+        "timing_jitter_ms": 15,
+        "position_jitter_px": 5,
+        "miss_chance": 0.0,
+        "hold_duration_jitter_ms": 30,
+    },
+    "LIVE": {
+        "label": " LIVE CLEAR",
+        "description": "保底通关，允许漏键和 BAD",
+        "timing_jitter_ms": 35,
+        "position_jitter_px": 10,
+        "miss_chance": 0.003,
+        "hold_duration_jitter_ms": 50,
+    },
+}
 
-    工作方式:
+MODE_NAMES = list(PERFORMANCE_MODES.keys())
+
+
+class NoteTracker:
+    """Note 轨迹追踪器 —— 预测引擎的核心。
       1. 从 ScreenAnalyzer 获取判定线上方的 note 检测结果
       2. 对每个轨道追踪 note 的 Y 位置变化
       3. 计算滚动速度 (px/s)
@@ -55,11 +85,18 @@ class NoteTracker:
         self.velocity_window = prediction_cfg.get("velocity_smooth_window", 3)
         self.manual_advance = prediction_cfg.get("manual_advance_ms", 0)
 
+        # 点击随机化参数 (从 AutoPlayer/config 传入)
+        rand_cfg = config.get("randomization", {})
+        self.timing_jitter_ms = rand_cfg.get("timing_jitter_ms", 15)
+        self.rand_enabled = rand_cfg.get("enabled", True)
+
         # 测量到的 ADB 延迟 (ms)
         self._measured_latency_ms = 0
 
         # 追踪状态: lane -> { positions: [(y, t), ...], velocity: float, fired: bool }
         self._tracks: dict[int, dict] = {}
+        # 缓存 lane X 坐标 (避免每次 _lane_to_x 重算)
+        self._lane_x_cache: list[int] = []
 
     def set_latency(self, latency_ms: float):
         """设置测量到的 ADB 延迟 (ms)。"""
@@ -116,9 +153,9 @@ class NoteTracker:
                     track["velocity"] = track["velocity"] * (1 - alpha) + velocity * alpha
 
         # 检测是否需要触发
-        advance_ms = self._measured_latency_ms
+        base_advance_ms = self._measured_latency_ms
         if self.manual_advance > 0:
-            advance_ms = self.manual_advance
+            base_advance_ms = self.manual_advance
 
         for lane, track in self._tracks.items():
             if track["fired"]:
@@ -134,6 +171,14 @@ class NoteTracker:
             # 如果速度太小 (接近 0), 说明 note 可能停在屏幕上了
             if abs(track["velocity"]) < 50:
                 continue
+
+            # ═══ 每 lane 独立时机随机化 (之前是全局一次, 现在 per-lane) ═══
+            advance_ms = base_advance_ms
+            if self.rand_enabled and self.timing_jitter_ms > 0:
+                jittered = advance_ms + random.uniform(
+                    -self.timing_jitter_ms, self.timing_jitter_ms
+                )
+                advance_ms = max(5, jittered)
 
             # 当前 Y 位置
             current_y = track["positions"][-1][0]
@@ -187,15 +232,16 @@ class NoteTracker:
         return triggers
 
     def _lane_to_x(self, lane: int) -> int:
-        """将轨道编号映射到 X 坐标 (像素)。"""
-        s = self.cfg.get("screen", {})
-        w = s.get("width", 1080)
-        l = [int(x * w) for x in s.get("left_lanes", [0.15, 0.25, 0.35])]
-        r = [int(x * w) for x in s.get("right_lanes", [0.65, 0.75, 0.85])]
-        all_l = l + r
-        if 0 <= lane < len(all_l):
-            return all_l[lane]
-        return w // 2
+        """将轨道编号映射到 X 坐标 (像素)，带缓存。"""
+        if not self._lane_x_cache:
+            s = self.cfg.get("screen", {})
+            w = s.get("width", 1080)
+            l = [int(x * w) for x in s.get("left_lanes", [0.15, 0.25, 0.35])]
+            r = [int(x * w) for x in s.get("right_lanes", [0.65, 0.75, 0.85])]
+            self._lane_x_cache = l + r
+        if 0 <= lane < len(self._lane_x_cache):
+            return self._lane_x_cache[lane]
+        return int(self.cfg.get("screen", {}).get("width", 1080) // 2)
 
     def reset(self):
         """重置所有轨迹 (新歌开始时调用)。"""
@@ -221,7 +267,7 @@ class AutoPlayer:
         5. 循环 1-5, 直到歌曲结束
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, mode: str = "FC"):
         self.cfg = config
         self.adb = ADBController(config)
         self.analyzer = ScreenAnalyzer(config)
@@ -247,10 +293,24 @@ class AutoPlayer:
         # 预测参数
         self.use_prediction = config.get("prediction", {}).get("enabled", True)
 
+        # ════════════════════════════════════════════
+        # 点击随机化 (反封号) 参数
+        # ════════════════════════════════════════════
+        rand_cfg = config.get("randomization", {})
+        self.rand_enabled = rand_cfg.get("enabled", True)
+        self.timing_jitter_ms = rand_cfg.get("timing_jitter_ms", 15)
+        self.position_jitter_px = rand_cfg.get("position_jitter_px", 5)
+        self.miss_chance = rand_cfg.get("miss_chance", 0.001)
+        self.hold_duration_jitter_ms = rand_cfg.get("hold_duration_jitter_ms", 30)
+
+        # ═══ 打歌模式 ═══
+        self._mode = mode.upper() if mode.upper() in MODE_NAMES else "FC"
+        self._mode_index = MODE_NAMES.index(self._mode)
+        self.set_mode(self._mode)
+
         # 状态
         self._last_game_active = 0.0
         self._held_lanes = set()
-        self._touch_history = []
         self._stats = {
             "frames": 0,
             "taps": 0,
@@ -261,7 +321,6 @@ class AutoPlayer:
             "start_time": 0.0,
             "last_stats_time": 0.0,
             "fps": 0.0,
-            "frame_count_stats": 0,
         }
 
     # ──────────────────────────────────────────
@@ -290,12 +349,20 @@ class AutoPlayer:
         self._stats["last_stats_time"] = time.time()
 
         prediction_status = "已启用" if self.use_prediction else "已禁用"
-        logger.info("=" * 50)
+        rand_status = "已启用" if self.rand_enabled else "已禁用"
+        mode_label = self.mode_label
+        logger.info("=" * 60)
         logger.info("自动打歌已启动!")
-        logger.info(f"延迟补偿: {self.latency_comp}ms  预测引擎: {prediction_status}")
+        logger.info(f"模式: {mode_label}  |  "
+                     f"延迟补偿: {self.latency_comp}ms  |  "
+                     f"预测引擎: {prediction_status}")
+        logger.info(f"随机化: {rand_status}  "
+                     f"时机±{self.timing_jitter_ms}ms  "
+                     f"坐标±{self.position_jitter_px}px")
         logger.info(f"判定线 Y: {self.analyzer.judgment_y}")
-        logger.info("热键: P=暂停  Q=退出  +/-=延迟补偿  </>=阈值")
-        logger.info("=" * 50)
+        logger.info("热键: P=暂停  Q=退出  M=切换模式  "
+                     "+/-=补偿  </>=阈值  []=随机化")
+        logger.info("=" * 60)
 
         try:
             self._main_loop()
@@ -326,6 +393,20 @@ class AutoPlayer:
         if self.use_prediction:
             logger.info(f"预测触发: {self._stats['predicted_triggers']}")
         logger.info("─" * 40)
+
+    def _reset_stats(self) -> None:
+        """重置统计计数器 (每首新歌调用)。"""
+        self._stats = {
+            "frames": 0,
+            "taps": 0,
+            "flicks": 0,
+            "holds": 0,
+            "predicted_triggers": 0,
+            "misses": 0,
+            "start_time": 0.0,
+            "last_stats_time": 0.0,
+            "fps": 0.0,
+        }
 
     def pause(self) -> None:
         """暂停/恢复。"""
@@ -415,15 +496,16 @@ class AutoPlayer:
 
     def _main_loop(self) -> None:
         """核心循环: 截图 → 分析 → 预测 → 触摸。"""
-        # 非阻塞键盘输入 (跨平台)
         kb_enabled = True
+        loop_count = 0  # 用于热键节流
 
         while self._running:
             loop_start = time.perf_counter()
+            loop_count += 1
 
             if self._paused:
                 # 即使在暂停状态也检查热键
-                if kb_enabled and self._check_keyboard():
+                if kb_enabled and loop_count % 5 == 0 and self._check_keyboard():
                     pass
                 time.sleep(0.1)
                 continue
@@ -451,6 +533,7 @@ class AutoPlayer:
             # 2. 分析 (判定线 + 预测区域)
             state = self.analyzer.analyze(frame)
             self._stats["frames"] += 1
+            self._stats["_frames_since_last_print"] = self._stats.get("_frames_since_last_print", 0) + 1
 
             # 3. 如果不在游戏中, 等待
             if not state.in_game:
@@ -465,30 +548,12 @@ class AutoPlayer:
                 continue
 
             self._last_game_active = time.time()
-            now = time.time()
 
-            # 4. 预测引擎: 触发提前发现的 note
-            if self.use_prediction:
-                triggers = self.tracker.update(
-                    state.predicted_notes,
-                    state.detected_notes,
-                    now,
-                )
-                for trigger in triggers:
-                    lane_x = trigger["x"]
-                    lane_y = trigger["y"]
-                    note_type = trigger["note_type"]
-                    if note_type == "tap":
-                        self.adb.tap(lane_x, lane_y)
-                        self._stats["predicted_triggers"] += 1
-                        self._stats["taps"] += 1
-                        logger.debug(f"[PRED] TAP lane={trigger['lane']} @({lane_x},{lane_y})")
+            # 4. 预测 + 判定线处理 (共享逻辑)
+            self._process_frame(state)
 
-            # 5. 处理判定线上的 notes (备用)
-            self._process_notes(state)
-
-            # 6. 键盘热键检查
-            if kb_enabled:
+            # 6. 键盘热键检查 (节流: 每 5 帧检查一次)
+            if kb_enabled and loop_count % 5 == 0:
                 self._check_keyboard()
 
             # 7. 显示实时统计
@@ -530,13 +595,38 @@ class AutoPlayer:
             self.latency_comp = max(0, self.latency_comp - 5)
             logger.info(f"延迟补偿: {self.latency_comp}ms")
             return True
-        elif c == ">":
+        elif c == ">" or c == ".":
             self.analyzer.bright_thresh = min(255, self.analyzer.bright_thresh + 5)
             logger.info(f"亮度阈值: {self.analyzer.bright_thresh}")
             return True
-        elif c == "<":
+        elif c == "<" or c == ",":
             self.analyzer.bright_thresh = max(0, self.analyzer.bright_thresh - 5)
             logger.info(f"亮度阈值: {self.analyzer.bright_thresh}")
+            return True
+        elif c == "[":
+            # 降低时机抖动幅度
+            self.timing_jitter_ms = max(0, self.timing_jitter_ms - 3)
+            logger.info(f"时机抖动: {self.timing_jitter_ms}ms"
+                        f"{' (已禁用)' if self.timing_jitter_ms == 0 else ''}")
+            return True
+        elif c == "]":
+            # 增加时机抖动幅度
+            self.timing_jitter_ms = min(100, self.timing_jitter_ms + 3)
+            logger.info(f"时机抖动: {self.timing_jitter_ms}ms")
+            # 启用随机化 (如果之前禁用了)
+            if not self.rand_enabled:
+                self.rand_enabled = True
+                logger.info("点击随机化已自动启用")
+            return True
+        elif c == "\\":
+            # 切换随机化启用/禁用
+            self.rand_enabled = not self.rand_enabled
+            status = "已启用" if self.rand_enabled else "已禁用"
+            logger.info(f"点击随机化: {status}")
+            return True
+        elif c == "m":
+            # 循环切换打歌模式
+            self.cycle_mode()
             return True
 
         return False
@@ -581,14 +671,14 @@ class AutoPlayer:
         elapsed = now - self._stats["start_time"]
         dt = now - self._stats["last_stats_time"]
 
+        # FIX: use actual frame count since last print, not static stats_interval
         if dt > 0:
-            frames_in_interval = self.stats_interval
-            fps = frames_in_interval / dt
+            actual_frames = self._stats.get("_frames_since_last_print", self.stats_interval)
+            fps = actual_frames / dt
             self._stats["fps"] = fps
+            self._stats["_frames_since_last_print"] = 0
 
         self._stats["last_stats_time"] = now
-
-        tracker_stats = self.tracker.get_stats() if self.use_prediction else {}
 
         stats_line = (
             f"\033[36m[STATS]\033[0m "
@@ -615,6 +705,34 @@ class AutoPlayer:
     # Note 处理
     # ──────────────────────────────────────────
 
+    def _process_frame(self, state: GameState) -> None:
+        """处理单帧: 预测引擎触发 + 判定线 note 处理。共享于 main_loop 和 batch。"""
+        now = time.time()
+
+        # 预测引擎: 触发提前发现的 note
+        if self.use_prediction:
+            triggers = self.tracker.update(
+                state.predicted_notes,
+                state.detected_notes,
+                now,
+            )
+            for trigger in triggers:
+                note_type = trigger["note_type"]
+
+                if self._should_skip():
+                    logger.debug(f"[PRED] SKIP lane={trigger['lane']} (随机漏键)")
+                    continue
+                jx, jy = self._apply_position_jitter(trigger["x"], trigger["y"])
+
+                if note_type == "tap":
+                    self.adb.tap(jx, jy)
+                    self._stats["predicted_triggers"] += 1
+                    self._stats["taps"] += 1
+                    logger.debug(f"[PRED] TAP lane={trigger['lane']} @({trigger['x']},{trigger['y']})")
+
+        # 判定线 notes (备用)
+        self._process_notes(state)
+
     def _process_notes(self, state: GameState) -> None:
         """处理检测到的判定线 notes。"""
         current_active = set()
@@ -636,34 +754,54 @@ class AutoPlayer:
                 self._release_lane(lane, lane_positions)
 
     def _do_tap(self, note: NoteEvent, x: int, y: int) -> None:
-        self.adb.tap(x, y)
+        """处理 tap note，应用随机化 (位置抖动 + 漏键)。"""
+        if self._should_skip():
+            logger.debug(f"SKIP tap lane={note.lane} @({x},{y}) (随机漏键)")
+            return
+        jx, jy = self._apply_position_jitter(x, y)
+        self.adb.tap(jx, jy)
         self._stats["taps"] += 1
-        logger.debug(f"TAP  lane={note.lane} @({x},{y})  conf={note.confidence:.2f}")
+        if jx != x or jy != y:
+            logger.debug(f"TAP  lane={note.lane} @({x},{y}) → ({jx},{jy})  conf={note.confidence:.2f}")
+        else:
+            logger.debug(f"TAP  lane={note.lane} @({x},{y})  conf={note.confidence:.2f}")
 
     def _do_flick(self, note: NoteEvent, x: int, y: int) -> None:
+        """处理 flick note，应用位置随机化。"""
+        if self._should_skip():
+            logger.debug(f"SKIP flick lane={note.lane} @({x},{y}) (随机漏键)")
+            return
+        jx, jy = self._apply_position_jitter(x, y)
         direction = note.flick_direction or "up"
         if direction == "up":
-            self.adb.flick_up(x, y, self.flick_distance, self.flick_duration)
+            self.adb.flick_up(jx, jy, self.flick_distance, self.flick_duration)
         elif direction == "down":
-            self.adb.flick_down(x, y, self.flick_distance, self.flick_duration)
+            self.adb.flick_down(jx, jy, self.flick_distance, self.flick_duration)
         elif direction == "left":
-            self.adb.flick_left(x, y, self.flick_distance, self.flick_duration)
+            self.adb.flick_left(jx, jy, self.flick_distance, self.flick_duration)
         elif direction == "right":
-            self.adb.flick_right(x, y, self.flick_distance, self.flick_duration)
+            self.adb.flick_right(jx, jy, self.flick_distance, self.flick_duration)
         else:
-            self.adb.flick_up(x, y, self.flick_distance, self.flick_duration)
+            self.adb.flick_up(jx, jy, self.flick_distance, self.flick_duration)
 
         self._stats["flicks"] += 1
         logger.debug(f"FLICK lane={note.lane} dir={direction} @({x},{y})")
 
     def _do_hold(self, note: NoteEvent, x: int, y: int) -> None:
+        """处理 hold note，应用位置随机化 + 长按时长抖动。"""
+        if self._should_skip():
+            logger.debug(f"SKIP hold lane={note.lane} @({x},{y}) (随机漏键)")
+            return
+        jx, jy = self._apply_position_jitter(x, y)
         if note.lane not in self._held_lanes:
-            self.adb.press(x, y, duration_ms=100)
+            jittered_dur = self._apply_hold_jitter(100)
+            self.adb.press(jx, jy, duration_ms=jittered_dur)
             self._held_lanes.add(note.lane)
             self._stats["holds"] += 1
-            logger.debug(f"HOLD START lane={note.lane} @({x},{y})")
+            logger.debug(f"HOLD START lane={note.lane} @({x},{y})→({jx},{jy}) dur={jittered_dur}ms")
         else:
-            self.adb.press(x, y, duration_ms=50)
+            jittered_dur = self._apply_hold_jitter(50)
+            self.adb.press(jx, jy, duration_ms=jittered_dur)
 
     def _release_lane(self, lane: int, positions: list) -> None:
         self._held_lanes.discard(lane)
@@ -672,6 +810,74 @@ class AutoPlayer:
     def _release_all(self) -> None:
         self._held_lanes.clear()
 
+    # ──────────────────────────────────────────
+    # 点击随机化 (反封号) —— 模拟人类操作
+    # ──────────────────────────────────────────
+
+    def _apply_position_jitter(self, x: int, y: int) -> tuple[int, int]:
+        """对点击坐标施加随机偏移，模拟手指落点不精确。"""
+        if not self.rand_enabled or self.position_jitter_px <= 0:
+            return x, y
+        jx = random.randint(-self.position_jitter_px, self.position_jitter_px)
+        jy = random.randint(-self.position_jitter_px, self.position_jitter_px)
+        return max(0, x + jx), max(0, y + jy)
+
+    def _apply_hold_jitter(self, base_ms: int) -> int:
+        """对长按时长施加随机偏移。"""
+        if not self.rand_enabled or self.hold_duration_jitter_ms <= 0:
+            return base_ms
+        offset = random.randint(-self.hold_duration_jitter_ms,
+                                self.hold_duration_jitter_ms)
+        return max(10, base_ms + offset)
+
+    def _should_skip(self) -> bool:
+        """随机决定是否跳过本次点击 (模拟漏键)。"""
+        if not self.rand_enabled or self.miss_chance <= 0:
+            return False
+        return random.random() < self.miss_chance
+
+    # ──────────────────────────────────────────
+    # 打歌模式切换 (AP / FC / LIVE)
+    # ──────────────────────────────────────────
+
+    def set_mode(self, mode: str) -> None:
+        """切换到指定打歌模式, 自动应用对应随机化参数。
+           同时同步到预测引擎 NoteTracker。"""
+        mode = mode.upper()
+        if mode not in PERFORMANCE_MODES:
+            logger.warning(f"未知打歌模式: {mode}, 使用 FC")
+            mode = "FC"
+
+        preset = PERFORMANCE_MODES[mode]
+        self._mode = mode
+        self._mode_index = MODE_NAMES.index(mode)
+        self.timing_jitter_ms = preset["timing_jitter_ms"]
+        self.position_jitter_px = preset["position_jitter_px"]
+        self.miss_chance = preset["miss_chance"]
+        self.hold_duration_jitter_ms = preset["hold_duration_jitter_ms"]
+
+        # 同步到 NoteTracker (预测引擎也使用这些随机化参数)
+        self.tracker.timing_jitter_ms = preset["timing_jitter_ms"]
+        self.tracker.rand_enabled = self.rand_enabled
+
+        logger.info(f"🎮 切换到 {preset['label']}  ─ "
+                     f"时机±{preset['timing_jitter_ms']}ms  "
+                     f"坐标±{preset['position_jitter_px']}px  "
+                     f"漏键{preset['miss_chance']*100:.1f}%")
+
+    def cycle_mode(self) -> None:
+        """循环切换到下一个模式。"""
+        next_idx = (self._mode_index + 1) % len(MODE_NAMES)
+        self.set_mode(MODE_NAMES[next_idx])
+
+    @property
+    def mode_name(self) -> str:
+        return self._mode
+
+    @property
+    def mode_label(self) -> str:
+        return PERFORMANCE_MODES[self._mode]["label"]
+
 
 # ──────────────────────────────────────────
 # 校准工具
@@ -679,14 +885,154 @@ class AutoPlayer:
 
 class Calibrator:
     """
-    校准工具: 自动测量延迟、判定线位置、轨道位置。
-    改进: 自动写入 config.yaml。
+    校准工具: 自动测量延迟、判定线位置、轨道位置、游戏速度。
+    改进: 自动写入 config.yaml + 自动检测游戏设置。
     """
 
     def __init__(self, config: dict):
         self.cfg = config
         self.adb = ADBController(config)
         self.analyzer = ScreenAnalyzer(config)
+
+    def detect_game_speed(self, duration_s: float = 8.0) -> dict:
+        """
+        自动检测游戏 note 滚动速度, 返回推荐的预测参数。
+
+        原理: 录制几秒游戏画面, 用 NoteTracker 追踪 note,
+              计算平均滚动速度, 反推最优的预测提前量和检测区域。
+
+        Returns:
+            {
+                "avg_velocity": float,    # 平均滚动速度 (px/s)
+                "recommended_lookahead_ms": int,  # 推荐提前检测窗口
+                "recommended_detect_ratio": float, # 推荐检测区域比例
+                "recommended_latency_comp_ms": int,
+                "detected": bool,
+                "message": str,
+            }
+        """
+        logger.info("=" * 50)
+        logger.info("🎯 自动检测游戏速度")
+        logger.info(f"请在手机上进入 PJSK 打歌界面, 程序将录制 {duration_s:.0f} 秒")
+        logger.info("=" * 50)
+
+        if not self.adb.wait_for_device(timeout=10):
+            return {"detected": False, "message": "设备未连接"}
+
+        # 手动创建 NoteTracker
+        tracker = NoteTracker(self.cfg)
+
+        # 测量延迟
+        latency = self.adb.measure_latency(samples=3)
+        total_latency = latency.get("total_avg_ms", 100)
+        tracker.set_latency(total_latency)
+
+        velocities = []
+        frame_count = 0
+        start_t = time.time()
+
+        logger.info("录制中...")
+        while time.time() - start_t < duration_s:
+            frame = self.adb.screencap()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            state = self.analyzer.analyze(frame)
+            frame_count += 1
+
+            if not state.in_game:
+                time.sleep(0.1)
+                continue
+
+            now = time.time()
+            triggers = tracker.update(state.predicted_notes, state.detected_notes, now)
+
+            # 记录有速度的轨道
+            for lane, track in tracker._tracks.items():
+                v = abs(track.get("velocity", 0))
+                if v > 100:  # 有效速度下限
+                    velocities.append(v)
+
+            # 限制精度 (30fps 足够)
+            time.sleep(0.03)
+
+        logger.info(f"录制完成: {frame_count} 帧, {len(velocities)} 个速度样本")
+
+        if len(velocities) < 10:
+            logger.warning("速度样本不足, 请确保在打歌画面中运行")
+            return {"detected": False, "message": "速度样本不足, 请打开打歌界面后重试"}
+
+        avg_v = sum(velocities) / len(velocities)
+        velocities.sort()
+        median_v = velocities[len(velocities) // 2]
+
+        # 基于速度计算推荐参数
+        screen_h = self.cfg["screen"]["height"]
+        # 判定线上方区域比例: 速度越快, 需要更大的检测区域
+        # 基础: 0.25; 每 500px/s 加 0.05
+        detect_ratio = max(0.2, min(0.6, 0.20 + (median_v / 500) * 0.05))
+        # 提前检测窗口: 计算让 note 从 detect_top 滚到判定线的时间
+        detect_distance_px = detect_ratio * screen_h
+        scroll_time_ms = (detect_distance_px / median_v) * 1000
+        lookahead_ms = int(scroll_time_ms * 0.6)  # 60% 位置开始规律追踪
+
+        msg = (f"平均速度: {avg_v:.0f} px/s, 中位: {median_v:.0f} px/s\n"
+               f"推荐检测区域: {detect_ratio:.3f} "
+               f"(能提前 {scroll_time_ms:.0f}ms 发现 note)\n"
+               f"推荐预测窗口 lookahead: {lookahead_ms}ms\n"
+               f"推荐延迟补偿: {int(total_latency)}ms")
+        logger.info(msg)
+
+        result = {
+            "detected": True,
+            "avg_velocity": round(avg_v, 1),
+            "median_velocity": round(median_v, 1),
+            "recommended_detect_ratio": round(detect_ratio, 4),
+            "recommended_lookahead_ms": lookahead_ms,
+            "recommended_latency_comp_ms": int(total_latency),
+            "sample_count": len(velocities),
+            "message": msg,
+        }
+
+        # 自动写入 config
+        self._auto_save_speed(result)
+        return result
+
+    def _auto_save_speed(self, result: dict) -> bool:
+        """自动将速度检测结果写入 config.yaml。"""
+        import yaml
+        config_path = "config.yaml"
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            modified = False
+
+            if result["recommended_detect_ratio"]:
+                config.setdefault("screen", {})
+                config["screen"]["note_detect_region_ratio"] = result["recommended_detect_ratio"]
+                modified = True
+
+            if result["recommended_lookahead_ms"]:
+                config.setdefault("prediction", {})
+                config["prediction"]["lookahead_ms"] = result["recommended_lookahead_ms"]
+                modified = True
+
+            if result["recommended_latency_comp_ms"]:
+                config.setdefault("timing", {})
+                config["timing"]["latency_compensation_ms"] = result["recommended_latency_comp_ms"]
+                modified = True
+
+            if modified:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(config, f, default_flow_style=False,
+                              allow_unicode=True, sort_keys=False)
+                logger.info("  ✅ config.yaml 已自动更新 (游戏速度参数)")
+                return True
+        except Exception as e:
+            logger.warning(f"自动写入游戏速度配置失败: {e}")
+        return False
 
     def run_all(self) -> dict:
         """运行全部校准, 返回校准结果。"""
@@ -926,9 +1272,9 @@ class BatchPlayer:
       5. 重复 2-4, 直到达到指定次数
     """
 
-    def __init__(self, config: dict, song_count: int = 0):
+    def __init__(self, config: dict, song_count: int = 0, mode: str = "FC"):
         self.cfg = config
-        self.player = AutoPlayer(config)
+        self.player = AutoPlayer(config, mode=mode)
 
         # Pipeline 引擎 (v3.0.0+)
         self.pipeline: Optional[PipelineEngine] = None
@@ -942,6 +1288,16 @@ class BatchPlayer:
         self.next_song_timeout = bp.get("next_song_timeout", 30.0)
         self.song_timeout = bp.get("song_timeout", 360)
         self.max_failures = bp.get("max_failures_per_song", 20)
+
+        # 冲榜模式浮动权重: 每首歌随机选择打歌模式
+        mode_weights = bp.get("mode_weights", {"AP": 25, "FC": 70, "LIVE": 5})
+        self._mode_pool = []
+        for m, w in mode_weights.items():
+            m = m.upper()
+            if m in MODE_NAMES and w > 0:
+                self._mode_pool.extend([m] * w)
+        if not self._mode_pool:
+            self._mode_pool = ["FC"]  # fallback
 
         # 尝试初始化 Pipeline 引擎
         if _HAS_PIPELINE and bp.get("use_pipeline", True):
@@ -998,13 +1354,17 @@ class BatchPlayer:
         self._write_stats()
 
         count_label = f"{self.target_count} 首" if self.target_count > 0 else "无限"
-        logger.info("=" * 50)
+        # 显示模式浮动范围
+        unique_modes = sorted(set(self._mode_pool))
+        mode_range = "→".join(PERFORMANCE_MODES[m]["label"] for m in unique_modes)
+        logger.info("=" * 60)
         logger.info("🔥 PJSK 冲榜模式 已启动!")
         logger.info(f"目标次数: {count_label}")
+        logger.info(f"模式浮动: {mode_range}")
         logger.info(f"延迟补偿: {self.player.latency_comp}ms")
         logger.info("请在手机上进入打歌画面, 程序将自动循环")
         logger.info("按 Ctrl+C 停止")
-        logger.info("=" * 50)
+        logger.info("=" * 60)
 
         try:
             if self._use_pipeline and self.pipeline:
@@ -1128,6 +1488,11 @@ class BatchPlayer:
 
         return False
 
+    def _pick_and_apply_mode(self) -> None:
+        """从权重池中随机选择一个打歌模式, 应用到 player。"""
+        chosen = random.choice(self._mode_pool)
+        self.player.set_mode(chosen)
+
     def _play_one_song(self) -> Optional[dict]:
         """
         打一首歌, 返回该次打歌的统计。
@@ -1135,9 +1500,14 @@ class BatchPlayer:
         内部使用 AutoPlayer 的循环逻辑, 但增加了:
           - 单曲超时保护
           - 结算画面检测后自动退出循环
+          - 随机模式浮动 (FC/AP/LIVE)
         """
-        # 重置追踪器
+        # 每首歌随机选择打歌模式 (浮动 AP/FC/LIVE)
+        self._pick_and_apply_mode()
+
+        # 重置追踪器和统计 (每首歌独立)
         self.player.tracker.reset()
+        self.player._reset_stats()
 
         self.player._running = True
         self.player._paused = False
@@ -1203,20 +1573,9 @@ class BatchPlayer:
 
             # 打歌中
             self.player._last_game_active = time.time()
-            now = time.time()
 
-            # 预测引擎
-            if self.player.use_prediction:
-                triggers = self.player.tracker.update(
-                    state.predicted_notes, state.detected_notes, now
-                )
-                for trigger in triggers:
-                    self.player.adb.tap(trigger["x"], trigger["y"])
-                    self.player._stats["predicted_triggers"] += 1
-                    self.player._stats["taps"] += 1
-
-            # 判定线 note 处理
-            self.player._process_notes(state)
+            # 预测 + 判定线 (共享逻辑)
+            self.player._process_frame(state)
 
             # 实时统计
             if self.player.show_stats and \
@@ -1242,6 +1601,7 @@ class BatchPlayer:
     def _handle_result_screen(self):
         """
         处理结算画面: 等待 → 逐次点击 → 返回选歌。
+        应用随机化: 点击间隔抖动 + 位置小偏移。
 
         PJSK 典型结算流程:
           1. 分数展示 (自动滚动)  ~3s
@@ -1249,21 +1609,38 @@ class BatchPlayer:
           3. 点击 → 可能显示称号/等级提升
           4. 点击 → 返回歌曲选择/房间
         """
-        # 等待结算动画播放
-        time.sleep(self.result_wait)
+        # 等待结算动画播放 (带随机化)
+        wait_interval = self.result_wait
+        if self.player.rand_enabled:
+            jitter = random.uniform(-1.0, 1.0)  # ±1s 随机等待
+            wait_interval = max(1.5, wait_interval + jitter)
+        time.sleep(wait_interval)
 
         # 找到屏幕中央
         w = self.cfg.get("screen", {}).get("width", 1080)
         h = self.cfg.get("screen", {}).get("height", 2400)
         cx, cy = w // 2, h // 2
 
+        result_tap_jitter = self.cfg.get("randomization", {}).get(
+            "result_tap_jitter", 0.8
+        )
+
         for i in range(self.max_result_taps):
             if not self._running:
                 return
 
-            # 点击屏幕中央
-            self.player.adb.tap(cx, cy)
-            time.sleep(self.result_tap_interval)
+            # 点击屏幕中央 (带位置微偏，模拟手指每次落点不同)
+            tap_x, tap_y = self.player._apply_position_jitter(cx, cy)
+            self.player.adb.tap(tap_x, tap_y)
+
+            # 随机化点击间隔: 模拟人类观看结算画面的速度变化
+            base_interval = self.result_tap_interval
+            if self.player.rand_enabled and result_tap_jitter > 0:
+                offset = random.uniform(-result_tap_jitter, result_tap_jitter)
+                actual_interval = max(0.8, base_interval + offset)
+            else:
+                actual_interval = base_interval
+            time.sleep(actual_interval)
 
             # 检查画面状态
             frame = self.player.adb.screencap()
@@ -1329,7 +1706,7 @@ class BatchPlayer:
             "total_holds": self._batch_stats.get("total_holds", 0),
             "total_frames": self._batch_stats.get("total_frames", 0),
             "log": self._get_recent_log(),
-            "version": "3.1.0",
+            "version": "4.1.0",
         }
         try:
             with open(stats_file, "w") as f:
@@ -1339,9 +1716,7 @@ class BatchPlayer:
 
     def _get_recent_log(self) -> str:
         """获取最近的日志文本 (最后 5 行)。"""
-        import io
         try:
-            # 从 logger 的 StreamHandler 获取
             for handler in logging.getLogger().handlers:
                 if hasattr(handler, 'stream') and hasattr(handler.stream, 'getvalue'):
                     lines = handler.stream.getvalue().strip().split("\n")
