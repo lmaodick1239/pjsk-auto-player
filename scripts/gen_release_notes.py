@@ -41,10 +41,19 @@ def main():
         output.append("_No CHANGELOG entry found for this version._")
         output.append("")
         output.append("Recent commits:")
-        os.system(
-            "git log --oneline --no-decorate -10 origin/main 2>/dev/null"
-            " | while read line; do echo \"- $line\"; done"
-        )
+        import subprocess
+        try:
+            # GITHUB_SHA 在 CI 中可用; 本地用 HEAD
+            ref = os.environ.get("GITHUB_SHA", "HEAD")
+            log = subprocess.run(
+                ["git", "log", "--oneline", "--no-decorate", "-10", ref],
+                capture_output=True, text=True, timeout=10
+            )
+            if log.returncode == 0 and log.stdout.strip():
+                for line in log.stdout.strip().splitlines():
+                    output.append(f"- {line}")
+        except Exception:
+            output.append("  (git log unavailable)")
 
     output.extend([
         "",

@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [4.8.1] - 2026-05-29
+
+### 🔧 Code Review & Bugfix
+
+- **hasattr → 布尔标志**: `_scrcpy_ready` / `_mt_ready` 在 `__init__` 初始化, 替代每帧 `hasattr()` 检查
+- **`_cleanup_minitouch` 补丁**: 重置 `_mt_ready = False`, 避免断连后静默使用慢速 ADB fallback
+- **scrcpy 帧丢失恢复**: `get_frame()` 返回 None 时自动关闭重启 + 降级 ADB
+- **`.legal_agreed` 路径修复**: 改为 `~/` 用户目录, 兼容 PyInstaller 打包 (项目目录只读)
+- **`gen_release_notes.py` 修复**: `os.system()` 输出未捕获 → `subprocess.run()`, CI 中 `origin/main` → `GITHUB_SHA`
+- **PID 离群值过滤**: 3-sigma 过滤异常样本, 防止极端值干扰延迟补偿
+
 ## [4.8.0] - 2026-05-29
 
 ### 🎯 自适应延迟 PID 控制器

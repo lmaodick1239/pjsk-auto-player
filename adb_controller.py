@@ -32,6 +32,10 @@ class ADBController:
         self.executable = self._find_adb()
         self.serial = self.cfg.get("device_serial", "").strip()
 
+        # 后端状态标志 (替代 hasattr)
+        self._scrcpy_ready = False
+        self._mt_ready = False
+
     # ──────────────────────────────────────────
     def _find_adb(self) -> str:
         """查找 adb 可执行文件 (Windows 下为 adb.exe)。"""
@@ -171,17 +175,17 @@ class ADBController:
 
         method = self.cfg.get("screencap_method", "auto")
 
-        # ===== 新增: auto 模式 — 自动检测最快可用后端 =====
+        # ===== auto 模式 — 自动检测最快可用后端 =====
         if method == "auto":
-            # 检查是否已有 scrcpy 实例运行
-            if hasattr(self, '_scrcpy_instance') and self._scrcpy_instance:
+            if self._scrcpy_ready:
                 return self._screencap_scrcpy()
-            # 尝试自动检测 scrcpy
+            # 首次: 尝试自动检测 scrcpy
             try:
                 import shutil
                 if shutil.which("scrcpy"):
                     logger.debug("scrcpy 已检测到, 自动启用 scrcpy 后端")
                     self.cfg["screencap_method"] = "scrcpy"
+                    self._scrcpy_ready = True
                     return self._screencap_scrcpy()
             except Exception:
                 pass
@@ -278,16 +282,27 @@ class ADBController:
                 "scrcpy_controller.py 未找到, 回退到 ADB screencap。"
                 "请确保 scrcpy_controller.py 在项目目录中。"
             )
+            self._scrcpy_ready = False
             return self._screencap_execout()
 
-        if not hasattr(self, '_scrcpy_instance'):
+        if not hasattr(self, '_scrcpy_instance') or self._scrcpy_instance is None:
             self._scrcpy_instance = ScrcpyController(self.cfg)
             if not self._scrcpy_instance.start():
                 logger.error("scrcpy 启动失败, 回退到 ADB screencap")
                 self._scrcpy_instance = None
+                self._scrcpy_ready = False
                 return self._screencap_execout()
+            self._scrcpy_ready = True
 
         frame = self._scrcpy_instance.get_frame()
+        if frame is None:
+            # 画面流中断: 尝试重启一次
+            logger.warning("scrcpy 帧丢失, 尝试重启...")
+            self.close_scrcpy()
+            self._scrcpy_instance = None
+            self._scrcpy_ready = False
+            # 降级到 ADB
+            return self._screencap_execout()
         return frame
 
     def close_scrcpy(self):
@@ -547,6 +562,7 @@ class ADBController:
             except Exception:
                 pass
             self._minitouch_proc = None
+        self._mt_ready = False
 
     # ──────────────────────────────────────────
     # 触摸操作 (自动选择后端: minitouch > ADB)

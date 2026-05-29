@@ -297,8 +297,21 @@ class NoteTracker:
             return 0.0
 
         # 平均实际提前量
-        avg_advance = sum(self._pid_samples) / len(self._pid_samples)
+        samples = self._pid_samples[:]
         self._pid_samples.clear()
+
+        # 过滤离群值: 剔除 >3σ 的样本
+        if len(samples) >= self._pid_min_samples:
+            mean = sum(samples) / len(samples)
+            variance = sum((s - mean) ** 2 for s in samples) / len(samples)
+            std = variance ** 0.5
+            if std > 0:
+                samples = [s for s in samples if abs(s - mean) <= 3 * std]
+
+        if len(samples) < self._pid_min_samples // 2:
+            return 0.0
+
+        avg_advance = sum(samples) / len(samples)
 
         # PID 误差: 实际提前量 - 目标提前量
         error = avg_advance - self._pid_target  # 正 = 提前太多
@@ -447,7 +460,11 @@ class AutoPlayer:
             if abs(adjustment) >= 1.0:
                 self.latency_comp = max(0, self.latency_comp + adjustment)
                 self.tracker.set_latency(self.latency_comp)
-                logger.info(f"PID 自适应延迟: 调整 {adjustment:+.1f}ms → 总补偿 {self.latency_comp:.0f}ms")
+                stats = self.tracker.get_stats()
+                logger.info(f"PID 自适应: 调整 {adjustment:+.1f}ms "
+                            f"→ 补偿 {self.latency_comp:.0f}ms "
+                            f"(samples={stats.get('pid_samples', '?')}, "
+                            f"avg_adv={stats.get('pid_avg_advance_ms', '?')}ms)")
 
         self.analyzer.close()
         self.adb.close_scrcpy()

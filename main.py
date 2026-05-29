@@ -144,7 +144,8 @@ AGREED_FLAG = ".legal_agreed"
 
 def _check_legal_acknowledgment() -> bool:
     """检查用户是否已确认法律条款。首次运行显示提示。"""
-    flag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), AGREED_FLAG)
+    # 使用用户目录而非项目目录 (兼容 PyInstaller 打包)
+    flag_path = os.path.join(os.path.expanduser("~"), ".pjsk-auto-player.agreed")
     if os.path.exists(flag_path):
         return True
 
