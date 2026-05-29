@@ -388,6 +388,11 @@ class AutoPlayer:
         # 状态
         self._last_game_active = 0.0
         self._held_lanes = set()
+        # v5.2: tap/flick 跨帧去重 cooldown (防止同 note 重复触发)
+        self._lane_tap_cooldown: dict[int, int] = {}
+        self._lane_flick_cooldown: dict[int, int] = {}
+        self._tap_cooldown_frames = config.get("timing", {}).get("tap_cooldown_frames", 3)
+        self._flick_cooldown_frames = config.get("timing", {}).get("flick_cooldown_frames", 5)
         self._stats = {
             "frames": 0,
             "taps": 0,
@@ -590,6 +595,10 @@ class AutoPlayer:
         kb_enabled = True
         loop_count = 0  # 用于热键节流
 
+        # ── v5.2: 主循环异常保护 + 异常退避 ──
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 10
+
         while self._running:
             loop_start = time.perf_counter()
             loop_count += 1
@@ -601,55 +610,69 @@ class AutoPlayer:
                 time.sleep(0.1)
                 continue
 
-            # 1. 截图
-            frame = self.adb.screencap()
-            if frame is None:
-                self._stats["misses"] += 1
-                if self._stats["misses"] >= 3:
-                    # 自动重连
-                    logger.info(f"截图失败 ({self._stats['misses']}次), 尝试重连...")
-                    if self._try_reconnect():
-                        logger.info("重连成功")
-                        self._stats["misses"] = 0
-                    else:
-                        logger.warning("重连失败, 继续尝试...")
-                if self._stats["misses"] > 15:
-                    logger.error("连续 15 次截图失败, 停止")
-                    break
-                time.sleep(0.3)
-                continue
-
-            self._stats["misses"] = 0
-
-            # 2. 分析 (判定线 + 预测区域)
-            state = self.analyzer.analyze(frame)
-            self._stats["frames"] += 1
-            self._stats["_frames_since_last_print"] = self._stats.get("_frames_since_last_print", 0) + 1
-
-            # 3. 如果不在游戏中, 等待
-            if not state.in_game:
-                if self._last_game_active > 0:
-                    idle = time.time() - self._last_game_active
-                    if idle > self.game_over_timeout:
-                        logger.info("游戏结束超时, 停止")
+            try:
+                # 1. 截图
+                frame = self.adb.screencap()
+                if frame is None:
+                    self._stats["misses"] += 1
+                    if self._stats["misses"] >= 3:
+                        # 自动重连
+                        logger.info(f"截图失败 ({self._stats['misses']}次), 尝试重连...")
+                        if self._try_reconnect():
+                            logger.info("重连成功")
+                            self._stats["misses"] = 0
+                        else:
+                            logger.warning("重连失败, 继续尝试...")
+                    if self._stats["misses"] > 15:
+                        logger.error("连续 15 次截图失败, 停止")
                         break
-                # 重置预测追踪
-                self.tracker.reset()
-                time.sleep(0.05)
-                continue
+                    time.sleep(0.3)
+                    continue
 
-            self._last_game_active = time.time()
+                self._stats["misses"] = 0
+                consecutive_errors = 0
 
-            # 4. 预测 + 判定线处理 (共享逻辑)
-            self._process_frame(state)
+                # 2. 分析 (判定线 + 预测区域)
+                state = self.analyzer.analyze(frame)
+                self._stats["frames"] += 1
+                self._stats["_frames_since_last_print"] = self._stats.get("_frames_since_last_print", 0) + 1
 
-            # 6. 键盘热键检查 (节流: 每 5 帧检查一次)
-            if kb_enabled and loop_count % 5 == 0:
-                self._check_keyboard()
+                # 3. 如果不在游戏中, 等待 (自适应 sleep)
+                if not state.in_game:
+                    if self._last_game_active > 0:
+                        idle = time.time() - self._last_game_active
+                        if idle > self.game_over_timeout:
+                            logger.info("游戏结束超时, 停止")
+                            break
+                    # 重置预测追踪
+                    self.tracker.reset()
+                    # 自适应 sleep: 拖越久越慢轮询
+                    wait_ms = min(50 + int(idle * 1000) if self._last_game_active > 0 else 50, 500)
+                    time.sleep(wait_ms / 1000.0)
+                    continue
 
-            # 7. 显示实时统计
-            if self.show_stats and self._stats["frames"] % self.stats_interval == 0:
-                self._print_stats()
+                self._last_game_active = time.time()
+
+                # 4. 预测 + 判定线处理 (共享逻辑)
+                self._process_frame(state)
+
+                # 6. 键盘热键检查 (节流: 每 5 帧检查一次)
+                if kb_enabled and loop_count % 5 == 0:
+                    self._check_keyboard()
+
+                # 7. 显示实时统计
+                if self.show_stats and self._stats["frames"] % self.stats_interval == 0:
+                    self._print_stats()
+
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"主循环异常 (连续 {consecutive_errors} 次): {e}", exc_info=True)
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    logger.critical("连续异常过多, 紧急停止")
+                    break
+                # 指数退避
+                backoff = min(0.05 * (2 ** min(consecutive_errors, 5)), 2.0)
+                time.sleep(backoff)
 
             # 8. 帧率控制 (自适应: 不强制 sleep 如果已经跑慢了)
             elapsed = time.perf_counter() - loop_start
@@ -761,13 +784,28 @@ class AutoPlayer:
         except (ImportError, AttributeError, Exception):
             return None
 
+    # v5.2: 缓存 _supports_ansi 结果 (终端不支持中途改变)
+    _cached_ansi_support: Optional[bool] = None
+
+    @classmethod
+    def _supports_ansi(cls) -> bool:
+        """检测终端是否支持 ANSI 转义序列。结果缓存于类变量。"""
+        if cls._cached_ansi_support is not None:
+            return cls._cached_ansi_support
+        import os
+        if sys.platform == "win32":
+            cls._cached_ansi_support = (
+                os.environ.get("TERM") is not None or os.environ.get("WT_SESSION") is not None
+            )
+        else:
+            cls._cached_ansi_support = sys.stdout.isatty()
+        return cls._cached_ansi_support
+
     def _print_stats(self):
         """在终端打印实时统计信息。"""
         now = time.time()
-        elapsed = now - self._stats["start_time"]
         dt = now - self._stats["last_stats_time"]
 
-        # FIX: use actual frame count since last print, not static stats_interval
         if dt > 0:
             actual_frames = self._stats.get("_frames_since_last_print", self.stats_interval)
             fps = actual_frames / dt
@@ -776,22 +814,38 @@ class AutoPlayer:
 
         self._stats["last_stats_time"] = now
 
-        stats_line = (
-            f"\033[36m[STATS]\033[0m "
-            f"FPS: \033[33m{self._stats['fps']:.1f}\033[0m | "
-            f"帧: {self._stats['frames']} | "
-            f"点: {self._stats['taps']} "
-            f"划: {self._stats['flicks']} "
-            f"按: {self._stats['holds']}"
-        )
+        use_ansi = self._supports_ansi()
 
-        if self.use_prediction:
-            stats_line += f" | 预触发: {self._stats['predicted_triggers']}"
-
-        stats_line += (
-            f" | 补偿: \033[32m{self.latency_comp}ms\033[0m | "
-            f"检测: \033[35m{self.analyzer.bright_thresh}\033[0m"
-        )
+        if use_ansi:
+            stats_line = (
+                f"\033[36m[STATS]\033[0m "
+                f"FPS: \033[33m{self._stats['fps']:.1f}\033[0m | "
+                f"帧: {self._stats['frames']} | "
+                f"点: {self._stats['taps']} "
+                f"划: {self._stats['flicks']} "
+                f"按: {self._stats['holds']}"
+            )
+            if self.use_prediction:
+                stats_line += f" | 预触发: {self._stats['predicted_triggers']}"
+            stats_line += (
+                f" | 补偿: \033[32m{self.latency_comp}ms\033[0m | "
+                f"检测: \033[35m{self.analyzer.bright_thresh}\033[0m"
+            )
+        else:
+            stats_line = (
+                f"[STATS] "
+                f"FPS: {self._stats['fps']:.1f} | "
+                f"帧: {self._stats['frames']} | "
+                f"点: {self._stats['taps']} "
+                f"划: {self._stats['flicks']} "
+                f"按: {self._stats['holds']}"
+            )
+            if self.use_prediction:
+                stats_line += f" | 预触发: {self._stats['predicted_triggers']}"
+            stats_line += (
+                f" | 补偿: {self.latency_comp}ms | "
+                f"检测: {self.analyzer.bright_thresh}"
+            )
 
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.write(stats_line)
@@ -832,7 +886,17 @@ class AutoPlayer:
         self._process_notes(state)
 
     def _process_notes(self, state: GameState) -> None:
-        """处理检测到的判定线 notes (使用缓存的轨道位置)。"""
+        """处理检测到的判定线 notes (使用缓存的轨道位置)。
+
+        v5.2: 增加 tap/flick 跨帧去重, 避免同一 note 被重复点击。
+        """
+        # 快速路径: 无 note 时只检查 hold 释放
+        if not state.detected_notes:
+            if self._held_lanes:
+                for lane in list(self._held_lanes):
+                    self._release_lane(lane, self._lane_positions)
+            return
+
         current_active = set()
         lane_positions = self._lane_positions or self.analyzer.get_lane_positions()
 
@@ -841,11 +905,28 @@ class AutoPlayer:
             current_active.add(note.lane)
 
             if note.note_type == "tap":
-                self._do_tap(note, lane_x, lane_y)
+                # 去重: 同一 lane 在前一帧已触发过 tap 则跳过
+                if not self._lane_tap_cooldown.get(note.lane, 0):
+                    self._do_tap(note, lane_x, lane_y)
+                    self._lane_tap_cooldown[note.lane] = self._tap_cooldown_frames
             elif note.note_type == "flick":
-                self._do_flick(note, lane_x, lane_y)
+                if not self._lane_flick_cooldown.get(note.lane, 0):
+                    self._do_flick(note, lane_x, lane_y)
+                    self._lane_flick_cooldown[note.lane] = self._flick_cooldown_frames
             elif note.note_type == "hold":
                 self._do_hold(note, lane_x, lane_y)
+
+        # 帧级 cooldown 衰减
+        for lane in list(self._lane_tap_cooldown):
+            if self._lane_tap_cooldown[lane] > 0:
+                self._lane_tap_cooldown[lane] -= 1
+            else:
+                del self._lane_tap_cooldown[lane]
+        for lane in list(self._lane_flick_cooldown):
+            if self._lane_flick_cooldown[lane] > 0:
+                self._lane_flick_cooldown[lane] -= 1
+            else:
+                del self._lane_flick_cooldown[lane]
 
         for lane in list(self._held_lanes):
             if lane not in current_active:

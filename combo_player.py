@@ -21,7 +21,7 @@ import os
 import time
 from typing import Optional
 
-from auto_play import AutoPlayer, NoteTracker, Calibrator
+from auto_play import AutoPlayer
 
 logger = logging.getLogger("pjsk_combo")
 
@@ -326,8 +326,12 @@ class ComboPlayer:
         return True
 
     def _wait_for_game(self) -> bool:
-        """等待进入执行画面。"""
+        """等待进入执行画面。
+
+        v5.2: SceneClassifier 实例缓存, 避免每帧重复创建。
+        """
         start = time.time()
+        sc = self._get_scene_classifier()
         while time.time() - start < self.next_song_timeout:
             if not self._running:
                 return False
@@ -335,8 +339,6 @@ class ComboPlayer:
             if frame is None:
                 time.sleep(0.3)
                 continue
-            from scene_classifier import SceneClassifier
-            sc = SceneClassifier(self.cfg)
             if sc.is_game(frame):
                 time.sleep(0.1)
                 frame2 = self.player.adb.screencap()
@@ -344,6 +346,13 @@ class ComboPlayer:
                     return True
             time.sleep(0.2)
         return False
+
+    def _get_scene_classifier(self):
+        """获取或创建缓存的 SceneClassifier 实例。"""
+        if not hasattr(self, '_cached_sc'):
+            from scene_classifier import SceneClassifier
+            self._cached_sc = SceneClassifier(self.cfg)
+        return self._cached_sc
 
     def _play_one(self) -> Optional[dict]:
         """打一首歌。"""
@@ -387,14 +396,9 @@ class ComboPlayer:
 
             self.player._last_game_active = time.time()
 
-            if self.player.use_prediction:
-                triggers = self.player.tracker.update(
-                    state.predicted_notes, state.detected_notes, time.time())
-                for t in triggers:
-                    self.player.adb.tap(t["x"], t["y"])
-                    self.player._stats["taps"] += 1
-
-            self.player._process_notes(state)
+            # v5.2: 使用共享的 _process_frame 替代内联预测处理,
+            #       确保随机化 (位置抖动 / 漏键) 和 flick/hold 预测正确处理
+            self.player._process_frame(state)
 
         self.player._release_all()
         return {
@@ -409,8 +413,7 @@ class ComboPlayer:
         time.sleep(self.result_wait)
         cx, cy = self.screen_w // 2, self.screen_h // 2
 
-        from scene_classifier import SceneClassifier
-        sc = SceneClassifier(self.cfg)
+        sc = self._get_scene_classifier()
 
         for i in range(self.max_result_taps):
             if not self._running:

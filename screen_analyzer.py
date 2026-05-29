@@ -58,43 +58,26 @@ class ScreenAnalyzer:
     """
 
     def __init__(self, config: dict):
+        self.cfg = config
         s = config["screen"]
         d = config["detection"]
         self.screen_w = s["width"]
         self.screen_h = s["height"]
-        self.cfg = config
 
-        # 将相对坐标转为像素坐标
-        self.judgment_y = int(s["judgment_line_y"] * self.screen_h)
-        self.left_lanes = [int(x * self.screen_w) for x in s["left_lanes"]]
-        self.right_lanes = [int(x * self.screen_w) for x in s["right_lanes"]]
-        self.all_lanes = self.left_lanes + self.right_lanes
-        self.detect_radius = s.get("detect_radius", 30)
-
-        # 判定线上方检测区域 (用于提前检测 note)
-        detect_ratio = s.get("note_detect_region_ratio", 0.35)
-        self.note_detect_top = int((s["judgment_line_y"] - detect_ratio) * self.screen_h)
-        self.note_detect_top = max(0, self.note_detect_top)
-
-        # 检测参数
+        # 检测参数 (与分辨率无关)
         self.bright_thresh = d["brightness"]["threshold"]
         self.min_area = d["brightness"]["min_contour_area"]
         self.max_area = d["brightness"]["max_contour_area"]
+        self.detect_radius = s.get("detect_radius", 30)
 
-        # 颜色范围
+        # 颜色范围 (与分辨率无关)
         self.white_lower = np.array(d["color"]["white_range"][:3])
         self.white_upper = np.array(d["color"]["white_range"][3:])
         self.color_lower = np.array(d["color"]["color_range"][:3])
         self.color_upper = np.array(d["color"]["color_range"][3:])
 
-        # 忽略区域
-        self.ignore_masks = []
-        for region in d.get("ignore_regions", []):
-            x1 = int(region[0] * self.screen_w)
-            y1 = int(region[1] * self.screen_h)
-            x2 = int(region[2] * self.screen_w)
-            y2 = int(region[3] * self.screen_h)
-            self.ignore_masks.append((x1, y1, x2, y2))
+        # 计算与分辨率相关的坐标 (首次调用)
+        self._recalc_coords()
 
         # 历史状态 (用于滤波)
         self._prev_active = set()
@@ -115,6 +98,9 @@ class ScreenAnalyzer:
             self._capture_opt = CaptureOptimizer(config)
         except ImportError:
             pass
+
+        # v5.2: 预分配形态学内核 (避免每帧 per-lane 重复创建)
+        self._morph_kernel_3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
         # 调试输出
         self.debug_dir = config.get("debug", {}).get("debug_dir", "debug_output")
@@ -204,7 +190,10 @@ class ScreenAnalyzer:
         return state
 
     def _recalc_coords(self):
-        """根据实际分辨率重算坐标。"""
+        """根据实际分辨率重算坐标。
+
+        v5.2: 提取为公共方法, __init__ 和 analyze() 共享, 消除重复逻辑。
+        """
         s = self.cfg["screen"]
         self.judgment_y = int(s["judgment_line_y"] * self.screen_h)
         self.left_lanes = [int(x * self.screen_w) for x in s["left_lanes"]]
@@ -387,8 +376,8 @@ class ScreenAnalyzer:
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, self.bright_thresh, 255, cv2.THRESH_BINARY)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        # 使用预分配的形态学内核 (v5.2: 避免 per-frame 重复分配)
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, self._morph_kernel_3)
 
         contours, _ = cv2.findContours(
             cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -458,8 +447,8 @@ class ScreenAnalyzer:
         color_mask = cv2.inRange(hsv, self.color_lower, self.color_upper)
         combined = cv2.bitwise_or(white_mask, color_mask)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        cleaned = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel)
+        # 使用预分配的形态学内核 (v5.2: 避免 per-frame 重复分配)
+        cleaned = cv2.morphologyEx(combined, cv2.MORPH_OPEN, self._morph_kernel_3)
 
         contours, _ = cv2.findContours(
             cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -495,6 +484,8 @@ class ScreenAnalyzer:
 
         方法: 在 note 周围找最亮的梯度方向。
         向量化实现: 用 numpy 直方图替换 Python 像素循环。
+
+        v5.2: early-return 优化 — 先检查亮像素再计算 Sobel (Sobel 昂贵)。
         """
         h, w = frame.shape[:2]
         r = self.detect_radius * 2
@@ -508,21 +499,20 @@ class ScreenAnalyzer:
             return ""
 
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, self.bright_thresh - 30,
-                                  255, cv2.THRESH_BINARY)
 
+        # 先检查亮像素: 如果不够多, 跳过昂贵的 Sobel
+        bright_mask = gray > self.bright_thresh - 30
+        if np.count_nonzero(bright_mask) < 10:
+            return ""
+
+        # Sobel 梯度 (仅在确认有 note 时计算)
         dx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
         dy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
 
         magnitude = np.sqrt(dx**2 + dy**2)
         angle = np.arctan2(dy, dx)
 
-        bright_mask = gray > self.bright_thresh - 30
-        if np.sum(bright_mask) < 10:
-            return ""
-
-        # ═══ 向量化: 用 numpy 替换像素循环 ═══
-        # 只处理亮像素位置的梯度和角度
+        # 向量化: 只处理亮像素位置的梯度和角度
         bright_angle = angle[bright_mask]
         bright_mag = magnitude[bright_mask]
 
@@ -533,8 +523,7 @@ class ScreenAnalyzer:
         np.add.at(hist, bin_idx, bright_mag)
 
         if np.max(hist) > 0:
-            main_dir = directions[int(np.argmax(hist))]
-            return main_dir
+            return directions[int(np.argmax(hist))]
 
         return ""
 
@@ -648,23 +637,25 @@ class ScreenAnalyzer:
     # ──────────────────────────────────────────
 
     def calibrate_judgment_line(self, frame: np.ndarray) -> int:
-        """校准判定线 Y 位置。"""
+        """校准判定线 Y 位置。
+
+        v5.2: 向量化实现 — 用 numpy 行均值替换 Python 逐行循环。
+        """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
 
         x_start = int(w * 0.2)
         x_end = int(w * 0.8)
+        y_start = int(h * 0.5)
+        y_end = int(h * 0.95)
 
-        # 在屏幕下方 50%-95% 区域找最亮的行
-        y_scores = []
-        for y in range(int(h * 0.5), int(h * 0.95)):
-            row = gray[y, x_start:x_end]
-            score = np.mean(row)
-            y_scores.append((y, score))
+        # 截取目标区域并计算行均值 (向量化, O(1) Python 层)
+        roi = gray[y_start:y_end, x_start:x_end]
+        row_means = np.mean(roi, axis=1)  # shape: (N,)
 
-        if y_scores:
-            y_scores.sort(key=lambda x: x[1], reverse=True)
-            best_y = y_scores[0][0]
+        if len(row_means) > 0:
+            best_local_y = int(np.argmax(row_means))
+            best_y = y_start + best_local_y
             logger.info(f"自动校准判定线 Y={best_y} (原配置={self.judgment_y})")
             return best_y
 

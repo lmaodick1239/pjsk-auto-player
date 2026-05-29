@@ -35,6 +35,8 @@ class ADBController:
         # 后端状态标志 (替代 hasattr)
         self._scrcpy_ready = False
         self._mt_ready = False
+        self._minitouch_socket: Optional[any] = None  # v5.2: 提前初始化防 AttributeError
+        self._minitouch_proc = None
 
     # ──────────────────────────────────────────
     def _find_adb(self) -> str:
@@ -476,23 +478,24 @@ class ADBController:
             return ""
 
     def _mt_tap(self, x: int, y: int) -> bool:
-        """通过 minitouch 发送点击事件。v4.5.0: 使用缓存的缩放因子。"""
+        """通过 minitouch 发送点击事件。v5.2: 套接字故障自动降级。"""
         if not self._minitouch_socket:
             return self._mt_fallback_tap(x, y)
         try:
-            # 优化: 乘法替代除法, 缩放因子已缓存
             scaled_x = int(x * self._mt_scale_x)
             scaled_y = int(y * self._mt_scale_y)
             cmd = f"d 0 {scaled_x} {scaled_y} 50\nc\nu 0\nc\n"
             self._minitouch_socket.sendall(cmd.encode())
             return True
-        except (socket.error, OSError) as e:
-            logger.warning(f"minitouch tap 失败: {e}")
+        except (socket.error, OSError, BrokenPipeError) as e:
+            logger.warning(f"minitouch tap 失败: {e}, 自动降级到 ADB input")
+            self._mt_ready = False
+            self._cleanup_minitouch()
             return self._mt_fallback_tap(x, y)
 
     def _mt_swipe(self, x1: int, y1: int, x2: int, y2: int,
                   duration_ms: int = 50) -> bool:
-        """通过 minitouch 发送滑动事件。v4.5.0: 使用缓存的缩放因子。"""
+        """通过 minitouch 发送滑动事件。v5.2: 套接字故障自动降级。"""
         if not self._minitouch_socket:
             return self._mt_fallback_swipe(x1, y1, x2, y2, duration_ms)
         try:
@@ -501,10 +504,8 @@ class ADBController:
             sx2 = int(x2 * self._mt_scale_x)
             sy2 = int(y2 * self._mt_scale_y)
 
-            # 下笔 + 移动 + 抬起
             cmd = f"d 0 {sx1} {sy1} 50\nc\n"
 
-            # 插值移动
             steps = max(int(duration_ms / 5), 1)
             for i in range(1, steps + 1):
                 t = i / steps
@@ -517,12 +518,14 @@ class ADBController:
             self._minitouch_socket.sendall(cmd.encode())
             time.sleep(duration_ms / 1000.0)
             return True
-        except (socket.error, OSError) as e:
-            logger.warning(f"minitouch swipe 失败: {e}")
+        except (socket.error, OSError, BrokenPipeError) as e:
+            logger.warning(f"minitouch swipe 失败: {e}, 自动降级到 ADB input")
+            self._mt_ready = False
+            self._cleanup_minitouch()
             return self._mt_fallback_swipe(x1, y1, x2, y2, duration_ms)
 
     def _mt_press(self, x: int, y: int, duration_ms: int = 100) -> bool:
-        """通过 minitouch 长按。v4.5.0: 使用缓存的缩放因子。"""
+        """通过 minitouch 长按。v5.2: 套接字故障自动降级。"""
         if not self._minitouch_socket:
             return self._mt_fallback_press(x, y, duration_ms)
         try:
@@ -534,8 +537,10 @@ class ADBController:
             cmd = f"u 0\nc\n"
             self._minitouch_socket.sendall(cmd.encode())
             return True
-        except (socket.error, OSError) as e:
-            logger.warning(f"minitouch press 失败: {e}")
+        except (socket.error, OSError, BrokenPipeError) as e:
+            logger.warning(f"minitouch press 失败: {e}, 自动降级到 ADB input")
+            self._mt_ready = False
+            self._cleanup_minitouch()
             return self._mt_fallback_press(x, y, duration_ms)
 
     def _mt_fallback_tap(self, x, y):

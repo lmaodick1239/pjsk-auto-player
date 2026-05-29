@@ -31,7 +31,6 @@ class PjskApp:
 
         # 控制器
         self.controller = None
-        self._cv: Optional[cv2.VideoCapture] = None  # noqa: F821
 
         # 运行状态
         self.running = False
@@ -56,6 +55,9 @@ class PjskApp:
 
         # 后端
         self._backend_initialized = False
+
+        # v5.2: 缓存场景分类器实例 (避免每帧重复创建)
+        self._scene_classifier = None
 
     def initialize(self):
         """初始化所有后端。"""
@@ -219,17 +221,21 @@ class PjskApp:
         frame_count = 0
         last_fps_time = time.time()
 
+        # v5.2: 缓存 ProcessTask 实例 (同一 task_name 复用)
+        _task_cache: dict[str, ProcessTask] = {}
+
         while self.running and not self._stop_event.is_set():
             try:
                 if self.paused:
                     time.sleep(0.1)
                     continue
 
-                # FPS 统计
+                # FPS 统计 (v5.2: 锁保护 shared dict 写入)
                 frame_count += 1
                 now = time.time()
                 if now - last_fps_time >= 1.0:
-                    self.stats["fps"] = frame_count / (now - last_fps_time)
+                    with self._lock:
+                        self.stats["fps"] = frame_count / (now - last_fps_time)
                     frame_count = 0
                     last_fps_time = now
 
@@ -250,7 +256,8 @@ class PjskApp:
                         task = ProcessTask(task_def, self.controller, frame)
                         result = task.run()
                         if result.action_taken:
-                            self.stats["clicks"] += 1
+                            with self._lock:
+                                self.stats["clicks"] += 1
 
                 # 非无限模式只跑一圈
                 if not infinite:
@@ -260,7 +267,8 @@ class PjskApp:
                 self._handle_error(e)
             except Exception as e:
                 logger.error("Unexpected error: %s", e, exc_info=True)
-                self.stats["errors"] += 1
+                with self._lock:
+                    self.stats["errors"] += 1
                 time.sleep(1.0)
 
     def _get_frame(self):
@@ -273,11 +281,15 @@ class PjskApp:
         return None
 
     def _detect_scene(self, frame) -> str:
-        """场景检测 → 返回对应的 Pipeline 任务名。"""
+        """场景检测 → 返回对应的 Pipeline 任务名。
+
+        v5.2: 复用缓存的 SceneClassifier 实例, 避免每帧重复创建。
+        """
         try:
-            from scene.classifier import SceneClassifier
-            classifier = SceneClassifier(self.config)
-            scene = classifier.classify(frame)
+            if self._scene_classifier is None:
+                from scene.classifier import SceneClassifier
+                self._scene_classifier = SceneClassifier(self.config)
+            scene = self._scene_classifier.classify(frame)
             return scene.task_name
         except Exception as e:
             logger.debug("Scene detection failed: %s", e)
@@ -285,7 +297,8 @@ class PjskApp:
 
     def _handle_error(self, error: PjskError):
         """处理分级异常并执行自动恢复策略。"""
-        self.stats["errors"] += 1
+        with self._lock:
+            self.stats["errors"] += 1
         error.log()
         strategy = get_recovery_strategy(error.code)
         action = strategy.get("action", "stop")

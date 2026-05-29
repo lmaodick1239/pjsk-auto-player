@@ -220,15 +220,19 @@ class PipelineEngine:
     def get_task(self, name: str) -> Optional[TaskDef]:
         return self._tasks.get(name)
 
-    def _run_subtasks(self, task: TaskDef):
-        """在任务执行前运行子任务 (用于弹窗检测等)。"""
+    def _run_subtasks(self, task: TaskDef, frame: Optional[np.ndarray] = None):
+        """在任务执行前运行子任务 (用于弹窗检测等)。
+
+        v5.2: 接受外部传入的 frame 以避免重复截图。
+        """
         if not task.sub:
             return
 
         if not self.adb:
             return
 
-        frame = self.adb.screencap()
+        if frame is None:
+            frame = self.adb.screencap()
         if frame is None:
             return
 
@@ -331,13 +335,16 @@ class PipelineEngine:
         if task.pre_delay > 0:
             time.sleep(task.pre_delay / 1000.0)
 
-        # 执行子任务 (在主任务之前运行)
-        self._run_subtasks(task)
-
         # 截图 (如果 ADB 可用)
         frame = None
         if self.adb:
             frame = self.adb.screencap()
+
+        # 执行子任务 (在主任务之前运行, v5.2: 复用已截取的 frame)
+        if frame is not None:
+            self._run_subtasks(task, frame)
+        else:
+            self._run_subtasks(task)  # 无 frame 时单独截图
 
         # 识别
         matched, x, y, confidence = self._recognize(task, frame)

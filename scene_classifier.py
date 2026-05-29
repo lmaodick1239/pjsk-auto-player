@@ -69,24 +69,34 @@ class SceneClassifier:
           3. 判定线活跃 → GAME
           4. 检测到 UI → MENU
           5. → UNKNOWN
+
+        v5.2: 修复 TTL 缓存竞态 — 帧哈希验证前置到 TTL 检查之前,
+              杜绝场景切换时返回 50ms 前的过时结果。
         """
         if frame is None:
             return SceneType.UNKNOWN
 
-        # ── 帧哈希缓存: 相同画面直接复用上次结果 ──
-        now = time.time()
-        if now - self._last_classify_time < self._cache_ttl:
-            return self._last_scene
-
-        # 快速帧哈希 (取 8x8 缩小图的均值哈希)
+        # ── 帧哈希缓存: 快速哈希 (8x8 缩略图) ──
+        # 必须在 TTL 检查之前计算哈希, 否则快帧率切换场景时会返回错误结果
         h, w = frame.shape[:2]
         small = cv2.resize(frame, (8, 8))
         frame_hash = hash(small.tobytes())
+
+        # 如果帧内容未变, 直接复用上次结果 (画面静止)
         if frame_hash == self._last_frame_hash:
             return self._last_scene
-        self._last_frame_hash = frame_hash
 
-        # 更新缓存时间戳 (写在最开始以便后续返回时缓存)
+        # 帧内容变了 — 重置哈希, 必须完整分类
+        self._last_frame_hash = frame_hash
+        now = time.time()
+
+        # 如果帧变了但在极短 TTL 内且上次不是 UNKNOWN, 用旧结果做 fallback
+        # (实际极少触发, 因为帧变意味场景大概率也变了)
+        if now - self._last_classify_time < self._cache_ttl:
+            # TTL 还没过, 但帧变了: 保守返回 UNKNOWN, 让上层用更鲁棒的逻辑
+            # 这比返回过时的 GAME/RESULT 安全得多
+            return SceneType.UNKNOWN
+
         self._last_classify_time = now
 
         # ── 步骤 1: 检测加载/黑屏 (最便宜) ──

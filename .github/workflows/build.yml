@@ -67,6 +67,9 @@ jobs:
             --add-data "bin:bin" \
             --add-data "config:config" \
             --add-data "resource:resource" \
+            --add-data "combos:combos" \
+            --add-data "teams:teams" \
+            --add-data "locale:locale" \
             --add-data "README.md:." \
             --add-data "TERMS.md:." \
             --add-data "CHANGELOG.md:." \
@@ -78,12 +81,16 @@ jobs:
             --hidden-import adb_controller \
             --hidden-import screen_analyzer \
             --hidden-import auto_play \
+            --hidden-import combo_player \
+            --hidden-import team_builder \
             --hidden-import ocr_reader \
             --hidden-import web_dashboard \
             --hidden-import scene_classifier \
             --hidden-import capture_optimizer \
             --hidden-import setup_wizard \
             --hidden-import scrcpy_controller \
+            --hidden-import native_gui \
+            --hidden-import desktop_app \
             --hidden-import app \
             --hidden-import cli \
             --hidden-import exceptions \
@@ -93,15 +100,23 @@ jobs:
             --hidden-import controller.adb \
             --hidden-import controller.scrcpy \
             --hidden-import controller.combined \
+            --hidden-import handlers.event_detect \
+            --hidden-import handlers.goto_game \
+            --hidden-import handlers.handle_result \
+            --hidden-import lib.anti_detection \
+            --hidden-import lib.decorators \
+            --hidden-import lib.resource \
             --hidden-import pipeline.base \
             --hidden-import pipeline.process \
             --hidden-import pipeline.node \
             --hidden-import pipeline.plugins \
             --hidden-import pipeline.task_data \
             --hidden-import pipeline.scheduler \
+            --hidden-import pipeline.timer \
             --hidden-import scene.classifier \
             --hidden-import scene.states \
             --hidden-import scene.transitions \
+            --hidden-import vision.button \
             --hidden-import vision.matcher \
             --hidden-import vision.ocr \
             --hidden-import vision.color \
