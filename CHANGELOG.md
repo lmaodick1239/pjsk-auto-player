@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [4.6.0] - 2026-05-29
+
+### 🎵 谱面缓存 (Song Profile Cache)
+
+- **跨歌曲速度保留**: `NoteTracker.reset()` 不再清空已学习的 note 滚动速度，仅重置位置和触发状态
+- **跳过校准期**: 同一首歌反复刷时，预测引擎直接从上一首歌结束时的速度开始，跳过 2-3 帧的重新校准 (~50ms)
+- **可配置开关**: `prediction.velocity_cache: true` (默认启用)，可设置为 false 恢复旧行为
+
 ## [4.5.0] - 2026-05-29
 
 ### ⚖️ 法律合规

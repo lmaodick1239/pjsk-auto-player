@@ -244,8 +244,18 @@ class NoteTracker:
         return int(self.cfg.get("screen", {}).get("width", 1080) // 2)
 
     def reset(self):
-        """重置所有轨迹 (新歌开始时调用)。"""
-        self._tracks.clear()
+        """重置所有轨迹 (新歌开始时调用)。
+        
+        v4.6.0: 谱面缓存 — 保留已学习的滚动速度, 仅清除位置和触发状态。
+        这样下一首歌开始时 NoteTracker 已有速度估计, 跳过 2-3 帧校准期。
+        """
+        if self.cfg.get("prediction", {}).get("velocity_cache", True):
+            # 缓存模式: 保留 velocity, 重置其他状态
+            for lane in self._tracks:
+                self._tracks[lane]["positions"] = []
+                self._tracks[lane]["fired"] = False
+        else:
+            self._tracks.clear()
 
     def get_stats(self) -> dict:
         """获取追踪统计。"""
