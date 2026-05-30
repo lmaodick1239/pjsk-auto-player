@@ -5,6 +5,54 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.5.0] - 2026-05-30
+
+### 🛡️ 阻塞检测与自动恢复系统 (Obstruction & Recovery)
+
+新增 `recovery/` 模块，检测并自动处理游戏运行中的所有阻塞事件。
+
+#### 检测能力
+
+| 事件类型 | 检测方法 | 处理方式 |
+|---------|---------|---------|
+| 服务器时间更新 / 日期变更弹窗 | OTSU + 四角遮罩 + OCR 关键词 | 自动关闭 (仅右上角 X) |
+| 活动公告 / 维护通知 | 同上 | 自动关闭 |
+| 画面冻结 (>4s 无变化) | 8×8 帧哈希比对 | 状态机 L1 恢复 |
+| 黑屏 (>30 帧持续) | 全图亮度均值 < 8 | 状态机 L2/L3 |
+| ADB 断连 (>10 帧无画面) | 连续 None 帧计数 | 状态机 L4 |
+| App 崩溃弹窗 | OCR 检测 | 状态机 L2/L3 |
+
+#### 安全设计
+
+- **弹窗关闭只操作右上角 X 按钮，不点中央 OK/确认**
+- **OCR 验证按钮文字**为安全列表 (閉じる/关闭/close) 后才点击
+- **消费类弹窗** (抽卡/ガチャ/购买/課金) 不自动关闭，改走告警
+- **未知类型弹窗**不自动关闭，跳过等待用户处理
+- 3 次同类型崩溃/5 分钟 → degraded 模式，跳过恢复直接告警
+
+#### 恢复状态机
+
+- 5 级升级链: navigate_back → restart_app → force_restart → adb_reconnect → safe_stop
+- 每级独立重试次数 + exponential backoff
+- 恢复后自动验证画面是否正常
+- 60s 总超时保护
+
+#### 控制器健康心跳
+
+- ADB 存活: 5s 间隔
+- scrcpy 进程: 10s 间隔
+- 最新帧超时: 5s 间隔
+- Minitouch socket: 10s 间隔
+
+#### 文件变更
+
+- `recovery/__init__.py` — ObstructionEngine 顶层协调器 (新建)
+- `recovery/detector.py` — ObstructionDetector + 弹窗/冻结/黑屏检测 (新建)
+- `recovery/machine.py` — RecoveryStateMachine 恢复状态机 (新建)
+- `recovery/scheduler.py` — HealthScheduler 健康心跳 (新建)
+- `app.py` — 集成 ObstructionEngine 到 _main_loop
+- `docs/2026-05-30-obstruction-recovery-design.md` — 设计文档
+
 ## [5.4.0] - 2026-05-30
 
 ### ⚡ 性能优化 — 主循环热路径 + 缓存复用
