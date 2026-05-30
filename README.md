@@ -464,6 +464,7 @@ pjsk-auto-player/
 ├── build.spec                  # PyInstaller 构建配置
 ├── VISION.md                   # 架构演进文档
 ├── VISION_ALAS.md              # ALAS 设计模式研究
+├── ROADMAP.md                  # 开发路线图
 ├── CHANGELOG.md                # 变更日志
 ├── TERMS.md                    # 用户协议
 ├── CLAUDE.md                   # AI 助手指南
