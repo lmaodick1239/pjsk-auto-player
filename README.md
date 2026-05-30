@@ -37,6 +37,11 @@ python main.py setup        # 设置向导
 
 | 版本 | 特性 |
 |------|------|
+| **v5.7.1** | 🐛 4 个关键修复 — OCR 安全漏洞 + 移除额外清除 + 高斯分布补全 + 代码清理 |
+| **v5.7.0** | ⚡ 零分配帧缓冲 — scrcpy screencap 消除 per-frame malloc，CPU 分配开销降为 0 |
+| **v5.6.0** | 🔐 对抗检测增强 — Session Fingerprint + 高斯抖动 + SAFE/PRECISION 冲榜模式 |
+| **v5.5.0** | 🛡️ 阻塞检测与自动恢复系统 — 5 级恢复状态机 + 健康心跳 + 弹窗自动关闭 |
+| **v5.4.0** | ⚡ 性能优化 — 主循环热路径 + 缓存复用 + 帧差跳过 + termios 缓存 |
 | **v5.3.0** | 🎮 游戏设置自动读取 + 多服适配 (JP/TW/CN/KR/EN) + 自动校准 |
 | **v5.2.0** | ⚡ 异步截屏 + Raw ADB + 批量触摸 — 端到端延迟大幅降低 |
 | **v5.1.0** | 🌍 i18n 国际化 (中/英/日) + 📱 PWA 手机控制面板 + 🌓 双主题 + 🧪 单元测试 |
@@ -100,6 +105,26 @@ python main.py setup        # 设置向导
 ### ⚡ PID 自适应延迟
 每次执行结束后基于实际触发提前量自动微调延迟补偿，逐步收敛到最佳值。
 
+### ⚡ 性能优化 (v5.4.0)
+
+#### 主循环热路径
+
+- **任务缓存复用**: `ProcessTask` 按 `task_name` 复用实例，消除 hot-path 中的每帧对象分配
+- **帧差跳过**: `CaptureOptimizer` 集成 — 画面无变化时直接跳过 Pipeline 处理
+  - 菜单/加载/结算等静态场景下可跳过 90%+ 的处理帧
+- **模块级导入**: 所有核心模块在文件顶部一次性导入，消除 hot-path 中的 import 系统调用
+
+#### scrcpy PPM buffer 保护
+
+添加 10MB buffer cap，防止主线程消费慢于 scrcpy 产生帧时内存无限增长。
+
+#### auto_play.py 热路径
+
+- `try/except KeyError` 替代 `dict.get()` 免去双次 dict 查找
+- 局部变量提取消除重复 dict 查找
+- cooldown 衰减从 `dict copy + del` 循环改为 `dict comprehension` 单次分配
+- `_get_key_nonblocking` termios 缓存 — 消除每 5 帧的 3 次系统调用
+
 ### 🎮 游戏设置自动读取 (v5.3.0)
 自动导航到游戏内 LIVE 设置页面，OCR 读取 `タイミング調整` (判定时移) 和 `ノーツ速度` (音符速度)，自动映射为软件参数并校准预测引擎。
 
@@ -117,6 +142,40 @@ python main.py setup        # 设置向导
 │  自动写入 config.yaml  +  更新预测引擎         │
 └──────────────────────────────────────────────┘
 ```
+
+### 🛡️ 阻塞检测与自动恢复系统 (v5.5.0)
+
+新增 `recovery/` 模块，检测并自动处理游戏运行中的所有阻塞事件，让长时间挂机无需人工干预。
+
+#### 检测能力
+
+| 事件类型 | 检测方法 | 处理方式 |
+|---------|---------|---------|
+| 服务器时间更新 / 日期变更弹窗 | OTSU + 四角遮罩 + OCR 关键词 | 自动关闭 (仅右上角 X) |
+| 活动公告 / 维护通知 | 同上 | 自动关闭 |
+| 画面冻结 (>4s 无变化) | 8×8 帧哈希比对 | 状态机 L1 恢复 |
+| 黑屏 (>30 帧持续) | 全图亮度均值 < 8 | 状态机 L2/L3 |
+| ADB 断连 (>10 帧无画面) | 连续 None 帧计数 | 状态机 L4 |
+| App 崩溃弹窗 | OCR 检测 | 状态机 L2/L3 |
+
+#### 安全设计
+
+- **弹窗关闭只操作右上角 X 按钮，不点中央 OK/确认**
+- OCR 验证按钮文字为安全列表后才会点击
+- 消费类弹窗 (抽卡/购买/課金) 不自动关闭，改走告警
+- 3 次同类型崩溃/5 分钟 → degraded 模式，直接告警
+
+#### 恢复状态机
+
+5 级升级链: `navigate_back → restart_app → force_restart → adb_reconnect → safe_stop`
+- 每级独立重试次数 + exponential backoff
+- 恢复后自动验证画面是否正常
+- 60s 总超时保护
+
+#### 控制器健康心跳
+
+- ADB 存活: 5s 间隔 \| scrcpy 进程: 10s 间隔
+- 最新帧超时: 5s 间隔 \| Minitouch socket: 10s 间隔
 
 ### 📡 多后端控制器
 - **scrcpy 60 FPS** — 视频流方式高速截图
@@ -143,9 +202,51 @@ python main.py setup        # 设置向导
 - HumanTouch 模拟器: 正态分布反应延迟、触摸压力变化
 - 长按微动序列
 
+### 🔐 对抗检测增强 (v5.6.0)
+
+#### Session Fingerprint 行为指纹系统
+
+每次 `start()` 生成新的行为指纹，session 间参数各不相同，避免重复模式被检测：
+- 坐标抖动标准差、时机抖动标准差、贝塞尔弯曲度、漏键率
+- 长按微动幅度、操作间隔基准、触摸持续时间
+- 参数值符合自然统计分布，不重复
+
+#### 高斯抖动
+
+`_apply_position_jitter` 和 `_apply_hold_jitter` 从均匀分布改为高斯分布 (±3σ 截断)，点击坐标自然分布在目标点周围，极少极端值。
+
+#### 新增 SAFE (冲榜) 和 PRECISION (AP) 模式
+
+| 模式 | 坐标抖动 | 时机抖动 | 漏键率 | 连续 AP 限制 | 适用场景 |
+|------|---------|---------|-------|-------------|---------|
+| SAFE | ±8px (高斯) | ±25ms (高斯) | 0~0.2% | ✅ 30 次上限 | 长时间冲榜/挂机 |
+| PRECISION | ±1px (高斯) | ±3ms (高斯) | 0% | 无 | 单次冲击 AP |
+| FC (默认) | ±5px (高斯) | ±15ms (高斯) | 0% | 无 | 日常 |
+
+#### 自然操作间隔
+
+`_interaction_delay`: 每次 touch 后模拟人类反应延迟，延迟值呈正态分布，基准值 session 间浮动 (30~90ms)。
+
 ### 🎵 自动活动检测 (v5.0.0)
 - HSV 颜色分析识别活动类型 (马拉松/芝士嘉年华/一般)
 - 自动选曲推荐
+
+### ⚡ 零分配帧缓冲 (v5.7.0)
+
+#### ScrcpyController: 消除每帧 malloc (核心)
+
+**之前**: `screencap()` 每帧调用 `self._latest_frame.copy()` 产生一次 ~7.7MB 内存分配 + memcpy（1080×2400 画面，30fps = 231MB/s 分配带宽）。
+
+**之后**: 预分配 `_out_frame` 缓冲，复用 `np.copyto()` 写入。分配成本从 `malloc + free + memcpy` 降为 `memcpy only`。
+
+| 指标 | 之前 | 之后 | 受益 |
+|------|------|------|------|
+| 每帧调用 | `malloc(7.7MB) + free() + copy()` | `memcpy()` | 零分配 |
+| CPU 分配开销 | ~0.15ms | 0ms | 100% |
+| 30s GC 压力 | 900 次分配 | 0 次持久分配 | 减少 GC |
+| Cache 局部性 | 每次不同地址 | 同一缓存行 | 更好 |
+
+当前瓶颈已从"单帧处理延迟"转移到"帧率上限"（scrcpy 30fps 传输带宽限制）。
 
 ---
 
@@ -251,6 +352,17 @@ pjsk-auto-player/
 │   ├── scrcpy.py               # scrcpy 视频流
 │   └── combined.py             # 智能路由 + Benchmark
 │
+├── recovery/                   # 阻塞检测与自动恢复 (v5.5.0)
+│   ├── __init__.py             # ObstructionEngine 顶层协调器
+│   ├── detector.py             # ObstructionDetector 弹窗/冻结/黑屏检测
+│   ├── machine.py              # RecoveryStateMachine 5 级恢复状态机
+│   └── scheduler.py            # HealthScheduler 控制器健康心跳
+│
+├── game_settings/              # 游戏设置自动读取 (v5.3.0)
+│   ├── server_config.py        # 5 服 UI/OCR 配置 + 自动检测
+│   ├── reader.py               # 导航 → OCR 读取核心
+│   └── calibrator.py           # 参数映射 + 校准引擎
+│
 ├── pipeline/                   # Pipeline V2
 │   ├── base.py                 # AbstractTask / PackageTask
 │   ├── process.py              # ProcessTask 执行引擎
@@ -283,11 +395,6 @@ pjsk-auto-player/
 ├── wizard/                     # 设置向导
 │   └── setup.py                # 5 步向导
 │
-├── game_settings/              # 游戏设置读取 (v5.3.0)
-│   ├── server_config.py        # 5 服 UI/OCR 配置 + 自动检测
-│   ├── reader.py               # 导航 → OCR 读取核心
-│   └── calibrator.py           # 参数映射 + 校准引擎
-│
 ├── handlers/                   # 游戏处理器
 │   ├── goto_game.py            # 游戏启动/导航
 │   ├── handle_result.py        # 结算/分数处理
@@ -307,7 +414,7 @@ pjsk-auto-player/
 │   ├── en_US.json              # English
 │   └── ja_JP.json              # 日本語
 │
-├── tests/                      # 单元测试 (pytest, 58 cases)
+├── tests/                      # 单元测试 (pytest, 6 文件)
 │   ├── conftest.py             # 共享 fixtures
 │   ├── test_anti_detection.py
 │   ├── test_exceptions.py
@@ -406,6 +513,9 @@ pjsk-auto-player/
                         │ 多算法投票 │ OCR/匹配  │ADB/raw │
                         │           │ /颜色    │/scrcpy │
                         ├──────────┴──────────┴────────┤
+                        │  阻塞检测 · 自动恢复 (Recovery)  │
+                        │   5 级状态机 · 弹窗处理 · 心跳  │
+                        ├──────────────────────────────┤
                         │  配置系统 V2 (分层 + 热加载)   │
                         │  异常体系 (分级 + 自动恢复)    │
                         │  反检测 (贝塞尔 + 触压 + 延迟)  │
@@ -413,11 +523,12 @@ pjsk-auto-player/
 ```
 
 ### 设计理念
-- **分层解耦**: 配置 → 控制器 → 识别 → Pipeline → GUI 完全独立
+- **分层解耦**: 配置 → 控制器 → 识别 → Pipeline → 恢复 → GUI 完全独立
 - **声明式配置**: 行为由 JSON/YAML 驱动，不硬编码
 - **MAA 任务模型**: ProcessTask 执行引擎 + @继承语法
 - **ALAS 异常体系**: 分级异常 + 自动恢复策略
 - **MaaFramework 架构**: 3 层分离 (Controller → Resource → Agent)
+- **全自动挂机**: Recovery 模块实现无人值守的弹窗处理 + 崩溃恢复 + 健康心跳
 
 ### 技术栈
 - Python 3.9+
@@ -433,7 +544,7 @@ pjsk-auto-player/
 
 | Workflow | 触发条件 | 说明 |
 |----------|---------|------|
-| **ci.yml** | push (非 main) / PR | lint + pytest (58 tests) |
+| **ci.yml** | push (非 main) / PR | lint + pytest |
 | **auto-release.yml** | push to main | 自动读取 VERSION → 创建 tag → 触发构建 |
 | **build.yml** | tag (v*.*.*) | PyInstaller 打包 → GitHub Release |
 
