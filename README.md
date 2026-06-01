@@ -37,6 +37,11 @@ python main.py setup        # 设置向导
 
 | 版本 | 特性 |
 |------|------|
+| **v5.12.0** | 🏪 模拟器管理 — MuMu/LDPlayer/BlueStacks 自动检测 + 一键启停 |
+| **v5.11.0** | 🗣️ Pipeline DSL — @task 装饰器声明式任务定义，兼容 JSON 引擎 |
+| **v5.10.0** | ⚡ Benchmark 面板 — Web 后端性能对比 + 一键基准测试 |
+| **v5.9.0** | 🔧 CI/CD 完善 — build.spec 同步 + SHA256 checksums + CI 模型校验 |
+| **v5.8.0** | 🧬 Pydantic 配置校验 — 14 个 BaseModel 严格校验 + 双引擎 |
 | **v5.7.1** | 🐛 4 个关键修复 — OCR 安全漏洞 + 移除额外清除 + 高斯分布补全 + 代码清理 |
 | **v5.7.0** | ⚡ 零分配帧缓冲 — scrcpy screencap 消除 per-frame malloc，CPU 分配开销降为 0 |
 | **v5.6.0** | 🔐 操作行为多样性 — Session Fingerprint + 高斯抖动 + SAFE/PRECISION 模式 |
@@ -73,6 +78,28 @@ python main.py setup        # 设置向导
 - **节点生命周期** — `pre_wait_freezes → pre_delay → action → post_wait_freezes → post_delay`
 - **插件系统** — AOP 风格，在任务前后自动注入日志/统计/错误处理
 - **子任务并行** — 主任务间隙并行扫描弹窗/通知
+
+### 🗣️ Pipeline DSL 声明式任务 (v5.11.0)
+受 KotoneBot @action 装饰器启发，Python 原生语法定义 Pipeline 任务：
+- **@task** / **@algorithm** / **@retry** / **@delay** / **@next_step** / **@failed_next** 等 9 个装饰器
+- **TaskRegistry** 注册表：自动生成 Pipeline V2 JSON，完全兼容现有引擎
+- **工厂方法**：`create_click_task()` / `create_wait_task()` 无需定义函数
+
+### 🧬 Pydantic 配置校验 (v5.8.0)
+- **14 个 Pydantic BaseModel** 严格校验所有配置节
+- **双引擎校验**：JSON Schema + Pydantic 并行运行，互补验证
+- **跨字段约束**：lane_start < lane_end / detection_top < judgment_line_y / 竖屏检测
+- **优雅降级**：pydantic 未安装时自动跳过，零影响
+
+### ⚡ Benchmark 面板 (v5.10.0)
+- **后端元数据一览**：自动检测各后端可用性（scrcpy / ADB）
+- **一键基准测试**：实测延迟、FPS，对比最快/最慢
+- **Web GUI 集成**：性能统计页面实时展示
+
+### 🏪 模拟器管理 (v5.12.0)
+- **自动检测**：MuMu Player / MuMu Player Pro / LDPlayer / BlueStacks
+- **一键启停**：CLI + Web API 统一控制
+- **ADB 自动连接**：检测到模拟器后自动 `adb connect`
 
 ### 🖥️ 原生桌面 GUI (v5.0.0)
 - **MAA 风格暗色窗口**: tkinter 原生 GUI，零外部依赖，跨平台
