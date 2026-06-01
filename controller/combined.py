@@ -354,6 +354,26 @@ class CombinedController(BaseController):
             stats["screencap_max_ms"] = max(self._screencap_times)
         return stats
 
+    def get_backend_info(self) -> list[dict]:
+        """Get metadata about all registered backends without running benchmarks.
+
+        Returns:
+            List of dicts with keys: name, description, fps_estimate, latency_ms_estimate,
+            available, requires_path.
+        """
+        result = []
+        available_names = {name for name, _, _ in self._available_backends}
+        for name, cls, meta in self._BACKENDS:
+            result.append({
+                "name": name,
+                "description": meta.get("description", ""),
+                "fps_estimate": meta.get("fps_estimate", 0),
+                "latency_ms_estimate": meta.get("latency_ms_estimate", 0),
+                "available": name in available_names,
+                "requires_path": meta.get("requires_path"),
+            })
+        return result
+
     def benchmark(self, samples: int = 30) -> dict:
         """Run a quick benchmark on all available backends.
 

@@ -794,6 +794,15 @@ input[type="range"]::-webkit-slider-thumb {
         </div>
       </div>
       <div class="card">
+        <div class="flex-between mb-8">
+          <span class="card-title" style="margin: 0;">⚡ 后端性能</span>
+          <button class="btn btn-sm" onclick="runBenchmark()" id="btn-bench">🔬 基准测试</button>
+        </div>
+        <div id="benchmark-result">
+          <div class="text-muted" style="font-size: 12px;">点击基准测试比较各后端性能</div>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-title">🎯 模式分布</div>
         <div class="stats-grid" id="mode-dist"></div>
       </div>
@@ -1538,6 +1547,98 @@ async function clearHistory() {
 }
 
 // ════════════════════════════════════════════════════
+// Benchmark
+// ════════════════════════════════════════════════════
+
+let _benchData = null;
+
+async function loadBenchmarkInfo() {
+  try {
+    const d = await apiGet('/benchmark');
+    _benchData = d;
+    renderBenchmarkInfo(d);
+  } catch (e) {
+    console.warn('loadBenchmark:', e);
+  }
+}
+
+function renderBenchmarkInfo(d) {
+  const el = document.getElementById('benchmark-result');
+  if (!d || !d.backends || !d.backends.length) {
+    el.innerHTML = '<div class="text-muted" style="font-size: 12px;">暂无后端信息</div>';
+    return;
+  }
+  let html = '<div style="font-size: 12px; margin-top: 8px;">';
+  // Active backend indicator
+  const active = d.active_backend || 'none';
+  html += `<div class="text-muted mb-8">当前后端: <span class="badge badge-green">${esc(active)}</span></div>`;
+  // Backend list
+  html += '<table style="width: 100%; border-collapse: collapse; font-size: 11px;">';
+  html += '<tr style="color: var(--text2);"><th style="text-align: left; padding: 2px 6px;">后端</th><th style="padding: 2px 6px;">状态</th><th style="padding: 2px 6px;">预估 FPS</th><th style="padding: 2px 6px;">延迟</th></tr>';
+  for (const b of d.backends) {
+    const statusCls = b.available ? 'badge-green' : 'badge-red';
+    const statusTxt = b.available ? '可用' : '不可用';
+    const isActive = b.name === active;
+    const rowStyle = isActive ? 'font-weight: 600;' : '';
+    html += `<tr style="${rowStyle}">
+      <td style="padding: 3px 6px;">${isActive ? '▶ ' : ''}${esc(b.name)}</td>
+      <td style="padding: 3px 6px;"><span class="badge ${statusCls}">${statusTxt}</span></td>
+      <td style="padding: 3px 6px; text-align: center;">${b.fps_estimate || '-'}</td>
+      <td style="padding: 3px 6px; text-align: center;">${b.latency_ms_estimate ? b.latency_ms_estimate + 'ms' : '-'}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  // Perf stats
+  if (d.perf && Object.keys(d.perf).length) {
+    html += '<div style="margin-top: 8px; color: var(--text2); font-size: 11px;">';
+    if (d.perf.screencap_avg_ms) html += `截屏平均: ${d.perf.screencap_avg_ms.toFixed(1)}ms &nbsp;`;
+    if (d.perf.screencap_min_ms) html += `最快: ${d.perf.screencap_min_ms.toFixed(1)}ms &nbsp;`;
+    if (d.perf.screencap_max_ms) html += `最慢: ${d.perf.screencap_max_ms.toFixed(1)}ms`;
+    html += '</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function runBenchmark() {
+  const btn = document.getElementById('btn-bench');
+  const el = document.getElementById('benchmark-result');
+  btn.textContent = '⏳ 测试中...';
+  btn.disabled = true;
+  el.innerHTML = '<div class="text-muted" style="font-size: 12px;">正在测试各后端性能 (约需 10-30 秒)...</div>';
+  try {
+    const d = await apiPost('/benchmark', { samples: 20 });
+    if (d.ok && d.results) {
+      let html = '<div style="font-size: 12px; margin-top: 8px;">';
+      html += '<div class="text-muted mb-8">🔬 基准测试结果 (采样 ' + d.samples + ' 次)</div>';
+      html += '<table style="width: 100%; border-collapse: collapse; font-size: 11px;">';
+      html += '<tr style="color: var(--text2);"><th style="text-align: left; padding: 2px 6px;">后端</th><th style="padding: 2px 6px;">平均延迟</th><th style="padding: 2px 6px;">FPS</th><th style="padding: 2px 6px;">最快/最慢</th></tr>';
+      for (const [name, r] of Object.entries(d.results)) {
+        if (r.error) {
+          html += `<tr><td style="padding: 3px 6px;">${esc(name)}</td><td colspan="3" style="color: var(--red);">❌ ${esc(r.error)}</td></tr>`;
+        } else {
+          html += `<tr>
+            <td style="padding: 3px 6px;">${esc(name)}</td>
+            <td style="padding: 3px 6px; text-align: center;">${r.latency_avg_ms}ms</td>
+            <td style="padding: 3px 6px; text-align: center;">${r.fps_estimate}</td>
+            <td style="padding: 3px 6px; text-align: center;">${r.latency_min_ms} / ${r.latency_max_ms}ms</td>
+          </tr>`;
+        }
+      }
+      html += '</table></div>';
+      el.innerHTML = html;
+      toast('✅ 基准测试完成', 'success');
+    } else {
+      el.innerHTML = '<div class="text-muted" style="font-size: 12px; color: var(--red);">❌ ' + esc(d.error || '测试失败') + '</div>';
+    }
+  } catch (e) {
+    el.innerHTML = '<div class="text-muted" style="font-size: 12px; color: var(--red);">❌ ' + esc(e) + '</div>';
+  }
+  btn.textContent = '🔬 基准测试';
+  btn.disabled = false;
+}
+
+// ════════════════════════════════════════════════════
 // Versions
 // ════════════════════════════════════════════════════
 
@@ -1597,6 +1698,7 @@ function init() {
   loadCombos();
   loadTeams();
   loadVersions();
+  loadBenchmarkInfo();
   pollStatus();
 
   // Resize chart on window resize

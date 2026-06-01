@@ -151,6 +151,9 @@ class WebHandler(BaseHTTPRequestHandler):
             elif path == "/auto-speed":
                 self._json(self._get_auto_speed())
 
+            elif path == "/benchmark":
+                self._json(self._get_benchmark())
+
             else:
                 self.send_error(404, f"Not found: {path}")
 
@@ -172,6 +175,13 @@ class WebHandler(BaseHTTPRequestHandler):
                     return
                 result = self._handle_command(cmd)
                 self._json(result)
+
+            elif path == "/benchmark":
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError:
+                    data = {}
+                self._json(self._run_benchmark(data))
 
             elif path == "/config":
                 self._json(self._save_config(body))
@@ -421,6 +431,52 @@ class WebHandler(BaseHTTPRequestHandler):
             return cal.detect_game_speed(duration_s=8.0)
         except Exception as e:
             return {"detected": False, "message": str(e)}
+
+    def _get_benchmark(self) -> dict:
+        """获取后端性能元数据和当前性能统计。"""
+        result: dict = {
+            "backends": [],
+            "active_backend": "none",
+            "perf": {},
+            "last_benchmark": None,
+        }
+        try:
+            from controller.combined import CombinedController
+            ctrl = CombinedController({"screen": {"width": 1080, "height": 2400}})
+            result["backends"] = ctrl.get_backend_info()
+            perf = ctrl.get_performance_stats()
+            result["active_backend"] = perf.get("active_backend", "none")
+            result["perf"] = perf
+        except Exception:
+            pass
+        # Try to get live stats from attached controller
+        if _app_instance:
+            try:
+                ctrl = getattr(_app_instance, "controller", None)
+                if ctrl:
+                    perf = ctrl.get_performance_stats()
+                    result["active_backend"] = perf.get("active_backend", "none")
+                    result["perf"] = perf
+                    result["backends"] = ctrl.get_backend_info()
+            except Exception:
+                pass
+        return result
+
+    def _run_benchmark(self, data: dict) -> dict:
+        """运行后端性能基准测试。"""
+        samples = int(data.get("samples", 30))
+        samples = max(5, min(samples, 100))  # clamp 5..100
+        try:
+            ctrl = None
+            if _app_instance:
+                ctrl = getattr(_app_instance, "controller", None)
+            if ctrl is None:
+                from controller.combined import CombinedController
+                ctrl = CombinedController({"screen": {"width": 1080, "height": 2400}})
+            result = ctrl.benchmark(samples=samples)
+            return {"ok": True, "results": result, "samples": samples}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def _get_version(self) -> str:
         """获取版本号。"""

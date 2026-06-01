@@ -5,6 +5,25 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.10.0] - 2026-06-01
+
+### ⚡ Benchmark 面板
+
+#### Controller 增强
+- `CombinedController.get_backend_info()`: 返回所有注册后端的元数据
+  (名称/描述/预估FPS/延迟/可用性/依赖路径)，无需运行基准测试
+
+#### Web API
+- `GET /benchmark`: 返回后端元数据 + 当前活跃后端 + 性能统计
+- `POST /benchmark {"samples": 20}`: 运行实际基准测试，返回各后端延迟/FPS
+
+#### Web GUI
+- 性能统计页面新增 **⚡ 后端性能面板**
+- 显示所有后端可用性 (绿色=可用, 红色=不可用)
+- 标注当前活跃后端 (▶ 图标)
+- **🔬 基准测试按钮**: 一键运行实际性能对比
+  (平均延迟/FPS/最快最慢延迟 表格展示)
+
 ## [5.9.0] - 2026-06-01
 
 ### 🔧 CI/CD 完善
