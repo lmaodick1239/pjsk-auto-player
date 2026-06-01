@@ -27,11 +27,13 @@ mkdir -p "$OUTPUT_DIR"
 ARCHES=("${@:-arm64 arm x86_64 x86}")
 
 # 多个下载源（按优先级）
-declare -A SOURCES
-SOURCES["github_latest"]="https://github.com/DeviceFarmer/minitouch/releases/latest/download/minitouch-{arch}"
-SOURCES["github_tag"]="https://github.com/DeviceFarmer/minitouch/releases/download/1.0.0/minitouch-{arch}"
-# maatouch (MAA fork, more maintained)
-SOURCES["maatouch"]="https://github.com/MaaAssistantArknights/maatouch/releases/latest/download/maatouch-{arch}"
+# 多个下载源（按优先级）
+SOURCES_NAMES=("github_latest" "github_tag" "maatouch")
+SOURCES_URLS=(
+  "https://github.com/DeviceFarmer/minitouch/releases/latest/download/minitouch-{arch}"
+  "https://github.com/DeviceFarmer/minitouch/releases/download/1.0.0/minitouch-{arch}"
+  "https://github.com/MaaAssistantArknights/maatouch/releases/latest/download/maatouch-{arch}"
+)
 
 echo "📥 PJSK Auto Player — Minitouch 预下载工具"
 echo "============================================"
@@ -49,9 +51,10 @@ for ARCH in "${ARCHES[@]}"; do
     fi
 
     DOWNLOADED=false
-    for SOURCE_NAME in "${!SOURCES[@]}"; do
-        URL="${SOURCES[$SOURCE_NAME]}"
-        URL="${URL//\{arch\}/$ARCH}"
+    for i in "${!SOURCES_NAMES[@]}"; do
+        SOURCE_NAME="${SOURCES_NAMES[$i]}"
+        URL="${SOURCES_URLS[$i]}"
+        URL="$(echo "$URL" | sed 's/{arch}/'"$ARCH"'/g')"
 
         echo "  ⏳ 尝试 $SOURCE_NAME ($ARCH) ..."
         HTTP_CODE=$(curl -sL -w "%{http_code}" -o "$OUTPUT_FILE" "$URL" 2>/dev/null || echo "000")
