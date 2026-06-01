@@ -37,6 +37,7 @@ python main.py setup        # 设置向导
 
 | 版本 | 特性 |
 |------|------|
+| **v5.12.1** | ⚡ 性能优化 & 健壮性增强 — 热路径 getattr 清零、帧转换去重、ADB 溢出保护、游戏计时严重 bug 修复 |
 | **v5.12.0** | 🏪 模拟器管理 — MuMu/LDPlayer/BlueStacks 自动检测 + 一键启停 |
 | **v5.11.0** | 🗣️ Pipeline DSL — @task 装饰器声明式任务定义，兼容 JSON 引擎 |
 | **v5.10.0** | ⚡ Benchmark 面板 — Web 后端性能对比 + 一键基准测试 |

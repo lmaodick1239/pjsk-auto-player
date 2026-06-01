@@ -5,6 +5,51 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.12.1] - 2026-06-01
+
+### ⚡ 性能优化
+
+#### `adb_controller.py` — 热路径优化
+- **消除 getattr 开销**: `_async_*` 属性在 `__init__` 中预初始化，消除反复 `getattr()` 调用（screencap 最热路径 #1）
+- **设备列表缓存**: `is_connected()` 添加 1s 缓存，减少重连检测时的子进程创建
+
+#### `scene_classifier.py` — 帧转换去重
+- 接受可选预计算灰度帧，避免场景检测和音符分析之间重复 `cv2.cvtColor()`
+
+#### `screen_analyzer.py` — 单次灰度转换
+- `analyze()` 中灰度帧只转一次，直接传递给 `SceneClassifier` 和 `_is_game_screen()`，每帧消除 ~2 次 cvtColor
+
+#### `ocr_reader.py` — 懒导入预热
+- `import cv2` 提升为模块级；`pytesseract` 添加防御性导入
+
+### 🛡️ 健壮性增强
+
+#### 原子写入
+- `auto_play.py`: `.song_history.json` 和 `.batch_stats.json` 改为 tmp+rename 原子写入，防止并发访问时损坏
+
+#### 优雅退出
+- `auto_play.py`: `BatchPlayer` 和 `ComboPlayer` 添加 SIGTERM/SIGINT 信号处理器，kill/daemon stop 时优雅退出
+
+#### ADB 可靠性
+- `flush_touch_batch()` 溢出保护 — 超过 7600 字符自动分段发送，防参数过长错误
+- `close()`/`__del__()` 保证资源清理（scrcpy、minitouch、异步线程）
+- `download_adb()` 清理临时 zip 文件
+
+#### 防御性编程
+- `auto_play.py`: 初始截屏最多重试 3 次
+- `screen_analyzer.py`: `_save_debug_frame()` try/except 保护
+- `pipeline/scheduler.py`: `run_once()` 中 context_provider 防御性异常捕获
+- `cli.py`: `setup_logging()` 处理无效日志级别
+
+### 🐛 关键修复
+
+#### combo_player.py — 游戏计时严重 bug
+- `total_game_time` 之前错误累加了 `time.time()`（Unix 时间戳）而非实际的游戏时长
+- `_play_one()` 现在返回 stats 中的 `duration` 字段，`_run_combo_loop` 正确使用它
+
+### 🧹 其他
+- `.gitignore` 添加运行时产物（song_history、debug_output、\*.tmp）
+
 ## [5.12.0] - 2026-06-01
 
 ### 🏪 模拟器管理

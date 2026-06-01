@@ -37,6 +37,12 @@ python main.py setup        # Setup wizard
 
 | Version | Features |
 |---------|---------|
+| **v5.12.1** | ⚡ Performance optimizations & robustness hardening — hot-path getattr elimination, frame conversion dedup, ADB overflow protection, game timer critical bug fix |
+| **v5.12.0** | 🏪 Simulator management — MuMu/LDPlayer/BlueStacks auto-detect with one-click start/stop |
+| **v5.11.0** | 🗣️ Pipeline DSL — declarative task decorators (@task, @algorithm, @retry, etc.) |
+| **v5.10.0** | ⚡ Benchmark panel — backend perf comparison with live benchmark in web dashboard |
+| **v5.9.0** | 🔧 CI/CD hardening — build.spec sync, SHA256 checksums, config model CI validation |
+| **v5.8.0** | 🧬 Pydantic config validation (Config V2.1) — 14 Pydantic models, dual-engine validation, graceful degradation |
 | **v5.7.1** | 🐛 4 critical fixes — OCR security vuln + removed extra clear + gaussian fix + code cleanup |
 | **v5.7.0** | ⚡ Zero-alloc framebuffer — scrcpy screencap eliminates per-frame malloc, CPU alloc cost 0 |
 | **v5.6.0** | 🔐 Behavioral Diversity — Session Fingerprint + Gaussian jitter + SAFE/PRECISION modes |
