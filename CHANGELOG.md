@@ -5,6 +5,33 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.8.0] - 2026-06-01
+
+### 🧬 Pydantic 配置校验 (Config V2.1)
+
+#### 新增 `config/models.py` — Pydantic v2 配置模型
+- **14 个 Pydantic BaseModel**: AdbConfig / ScrcpyConfig / MinitouchConfig /
+  ScreenConfig / PlayConfig / PidConfig / PipelineConfig / SceneConfig /
+  WebConfig / NotificationConfig / LoggingConfig / HotkeysConfig /
+  GameSettingsConfig / ControllerConfig
+- **顶层 PjskConfig**: 聚合所有配置节，含跨字段约束验证
+- **Field 约束**: ge/le 范围检查、Literal 枚举约束、自然描述信息
+- **跨字段验证器**: lane_start < lane_end, detection_top < judgment_line_y,
+  width < height (竖屏检测), miss_rate 业务警告
+- **兼容接口**: `PjskConfig.from_dict()` 忽略未知字段,
+  `PjskConfig.to_dict()` 导出为 ConfigLoader 兼容的 dict
+
+#### 双引擎校验
+- `validate_config_pydantic()`: Pydantic 严格校验 (schema.py + __init__.py)
+- `validate_config_full()`: JSON Schema + Pydantic 双引擎合并校验
+- 未安装 pydantic 时优雅降级 (返回空列表 + 日志警告)
+- 向后兼容: 原有 `validate_config()` 行为不变
+
+#### CI/CD 适配
+- build.yml: `--hidden-import pydantic` + `--hidden-import config.models`
+- build.yml: pip install 添加 pydantic 依赖
+- requirements.txt: 添加 pydantic>=2.0
+
 ## [5.7.1] - 2026-05-30
 
 ### 🐛 Bugfix

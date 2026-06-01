@@ -1,6 +1,7 @@
 opencv-python>=4.8.0
 numpy>=1.24.0
 pyyaml>=6.0
+pydantic>=2.0
 
 # 可选依赖:
 # scipy>=1.10.0       # 一键校准轨道位置

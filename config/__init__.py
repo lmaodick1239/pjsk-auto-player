@@ -349,7 +349,7 @@ def load_config(profile: str = "") -> dict:
 
 
 def validate_config(config: dict | None = None) -> list:
-    """校验配置的正确性。
+    """校验配置的正确性 (JSON Schema 引擎)。
 
     Args:
         config: 待校验配置字典, 为 None 时使用当前加载的配置
@@ -361,3 +361,42 @@ def validate_config(config: dict | None = None) -> list:
     if config is None:
         config = get_config_loader().config
     return _validate(config)
+
+
+def validate_config_pydantic(config: dict | None = None) -> list:
+    """使用 Pydantic 严格校验配置 (v5.8.0+)。
+
+    相比 validate_config(), 提供:
+      - 严格类型检查 (不自动转换)
+      - 跨字段约束验证
+      - 业务逻辑校验 (如 miss_rate 警告)
+
+    Args:
+        config: 待校验配置字典, 为 None 时使用当前加载的配置
+
+    Returns:
+        SchemaError 列表, 空列表表示通过校验
+
+    Note:
+        需要 pydantic>=2.0。未安装时返回空列表并记录警告。
+    """
+    from config.schema import validate_config_pydantic as _validate_pd
+    if config is None:
+        config = get_config_loader().config
+    return _validate_pd(config)
+
+
+def validate_config_full(config: dict | None = None) -> list:
+    """双引擎校验: JSON Schema + Pydantic (v5.8.0+)。
+
+    同时运行两种校验引擎，合并所有错误。推荐在 CI 或 pre-commit 中使用。
+
+    Args:
+        config: 待校验配置字典, 为 None 时使用当前加载的配置
+
+    Returns:
+        SchemaError 列表 (JSON Schema 错误 + Pydantic 错误)
+    """
+    errors = validate_config(config)
+    errors.extend(validate_config_pydantic(config))
+    return errors

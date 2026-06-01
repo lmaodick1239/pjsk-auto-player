@@ -1,16 +1,17 @@
 """
-PJSK Auto Player — 配置 Schema 校验 (JSON Schema-based).
+PJSK Auto Player — 配置 Schema 校验 (双引擎: JSON Schema + Pydantic).
 
-基于 ALAS config/template.json 设计理念。
+基于 ALAS config/template.json 设计理念，新增 Pydantic v2 严格校验引擎。
 验证配置文件的完整性和类型正确性，前端可据此自动生成配置表单。
 
 用法:
-    from config.schema import validate_config, CONFIG_SCHEMA
+    from config.schema import validate_config, validate_config_pydantic, CONFIG_SCHEMA
 
+    # 传统 JSON Schema 校验 (始终可用)
     errors = validate_config(my_config)
-    if errors:
-        for e in errors:
-            print(f"{e['path']}: {e['message']}")
+
+    # Pydantic 严格校验 (v5.8.0+, 需 pydantic>=2.0)
+    errors = validate_config_pydantic(my_config)
 """
 
 from __future__ import annotations
@@ -300,6 +301,47 @@ def _check_critical_values(config: dict, errors: list[SchemaError]) -> None:
             f"miss_rate={miss_rate} 较大, 会影响 AP 率",
             "warning",
         ))
+
+
+# ── Pydantic 校验引擎 (v5.8.0+) ─────────────────────────────
+
+
+def validate_config_pydantic(config: dict) -> list[SchemaError]:
+    """使用 Pydantic 模型严格校验配置 (v5.8.0+)。
+
+    这是 validate_config() 的增强替代方案，提供:
+      - 严格的类型检查 (不自动转换 str→int 等)
+      - 跨字段约束验证 (如 lane_start < lane_end)
+      - 更精确的错误消息 (包含具体的约束描述)
+      - 业务逻辑校验 (如 miss_rate 警告)
+
+    Args:
+        config: 配置字典 (通常是加载后的合并配置)
+
+    Returns:
+        SchemaError 列表，空列表表示通过校验
+
+    Note:
+        需要 pydantic>=2.0。如果未安装，返回空列表并记录警告。
+    """
+    try:
+        from config.models import validate_with_pydantic
+    except ImportError:
+        logger.warning(
+            "pydantic 未安装，跳过 Pydantic 校验。"
+            " 运行 'pip install pydantic>=2.0' 启用。"
+        )
+        return []
+
+    pydantic_errors = validate_with_pydantic(config)
+    result: list[SchemaError] = []
+    for err in pydantic_errors:
+        result.append(SchemaError(
+            path=err["path"],
+            message=err["message"],
+            severity=err.get("severity", "error"),
+        ))
+    return result
 
 
 def generate_config_template() -> dict:
