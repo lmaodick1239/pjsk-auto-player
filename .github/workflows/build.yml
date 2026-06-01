@@ -175,10 +175,10 @@ jobs:
           path: dist/${{ matrix.dmg_name }}
           retention-days: 7
 
-  # ── Release: 仅在 tag push 时创建正式 Release ──
+  # ── Release: 在 tag push 或 workflow_dispatch 时创建正式 Release ──
   release:
     needs: [build]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,7 +203,11 @@ jobs:
       - name: Detect tag version
         id: tag
         run: |
-          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT

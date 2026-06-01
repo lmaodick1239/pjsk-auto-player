@@ -4,11 +4,10 @@ name: Auto Tag & Release
 # 每次 push 到 main 自动:
 #   1. 读取 VERSION 文件
 #   2. 检查对应 tag (vX.Y.Z) 是否已存在
-#   3. 不存在 → 自动创建 annotated tag + push → 触发 build.yml 构建 Release
+#   3. 不存在 → 自动创建 annotated tag + push + 触发 build.yml 构建 Release
 #
-# 跳过条件:
-#   - commit message 包含 [skip ci] 或 skip-tag
-#   - 只改了 .md / .github / scripts / tests / resource / locale
+# 注意: 使用 workflow_dispatch 触发 build.yml 而非依赖 tag push 事件，
+#       因为 GITHUB_TOKEN 推送的 tag 不会触发其他 workflow。
 # ═══════════════════════════════════════════════════════════════
 
 on:
@@ -25,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   auto-tag:
@@ -75,7 +75,7 @@ jobs:
           echo "## PJSK Auto Player v${VER}" > "$NOTES_FILE"
           echo "" >> "$NOTES_FILE"
           if [ -f CHANGELOG.md ]; then
-            sed -n "/^## \[${VER}\]/,/^## \[/p" CHANGELOG.md | sed '$d' >> "$NOTES_FILE"
+            sed -n "/^## \\[${VER}\\]/,/^## \\[/p" CHANGELOG.md | sed '$d' >> "$NOTES_FILE"
           fi
           if [ $(wc -l < "$NOTES_FILE") -le 2 ]; then
             echo "### Changes" >> "$NOTES_FILE"
@@ -96,17 +96,23 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git tag -a "$TAG" -m "v${VER} - Auto-release by CI"
-
           git push origin "$TAG"
-          echo "✅ Tag $TAG created and pushed → triggers build.yml"
+          echo "✅ Tag $TAG created and pushed"
 
-      - name: Create GitHub Release
+      - name: Save release notes artifact
         if: steps.check.outputs.exists == 'false'
-        uses: ncipollo/release-action@v1
+        uses: actions/upload-artifact@v4
         with:
-          tag: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }} - PJSK Auto Player
-          bodyFile: ${{ steps.notes.outputs.notes_file }}
-          makeLatest: true
-          prerelease: false
-          skipIfReleaseExists: true
+          name: release-notes
+          path: /tmp/release_notes.md
+          retention-days: 1
+
+      - name: Trigger Build & Release workflow
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          echo "🔄 Triggering build.yml for $TAG..."
+          gh workflow run build.yml --ref main -f version="$TAG"
+          echo "✅ Build & Release workflow triggered for $TAG"
