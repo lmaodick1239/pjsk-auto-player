@@ -5,6 +5,34 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.12.0] - 2026-06-01
+
+### 🏪 模拟器管理
+
+#### `controller/simulator.py` — 跨平台模拟器管理
+- **SimulatorInfo**: 模拟器实例数据结构 (名称/厂商/进程/ADB端口)
+- **SimulatorManager**: 管理器核心类
+  - `detect()`: 自动检测已安装模拟器 (检查文件路径 + 进程)
+  - `list_running()` / `list_installed()` / `list_all()`: 查询接口
+  - `start(name)`: 一键启动模拟器
+  - `stop(name)`: 一键停止模拟器
+  - `connect_adb(name)`: 自动 ADB 连接到模拟器
+  - `to_dict()`: 导出为 JSON 兼容格式
+
+#### 支持的模拟器
+- **MuMu Player** (macOS / Windows)
+- **MuMu Player Pro** (macOS)
+- **LDPlayer** (Windows)
+- **BlueStacks** (macOS / Windows)
+- 可扩展: 添加 `_KNOWN_SIMULATORS` 条目即可支持新模拟器
+
+#### Web API
+- `GET /simulators`: 列出所有检测到的模拟器及其状态
+- `POST /simulator {"action": "detect"}`: 强制重新检测
+- `POST /simulator {"action": "start", "name": "mumu"}`: 启动
+- `POST /simulator {"action": "stop", "name": "mumu"}`: 停止
+- `POST /simulator {"action": "connect", "name": "mumu"}`: ADB 连接
+
 ## [5.11.0] - 2026-06-01
 
 ### 🗣️ Pipeline DSL 声明式任务原型

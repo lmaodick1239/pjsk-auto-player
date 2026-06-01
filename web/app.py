@@ -151,6 +151,9 @@ class WebHandler(BaseHTTPRequestHandler):
             elif path == "/auto-speed":
                 self._json(self._get_auto_speed())
 
+            elif path == "/simulators":
+                self._json(self._get_simulators())
+
             elif path == "/benchmark":
                 self._json(self._get_benchmark())
 
@@ -175,6 +178,13 @@ class WebHandler(BaseHTTPRequestHandler):
                     return
                 result = self._handle_command(cmd)
                 self._json(result)
+
+            elif path == "/simulator":
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError:
+                    data = {}
+                self._json(self._handle_simulator(data))
 
             elif path == "/benchmark":
                 try:
@@ -477,6 +487,54 @@ class WebHandler(BaseHTTPRequestHandler):
             return {"ok": True, "results": result, "samples": samples}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _get_simulators(self) -> dict:
+        """获取模拟器列表。"""
+        try:
+            from controller.simulator import get_simulator_manager
+            mgr = get_simulator_manager()
+            return {"simulators": mgr.to_dict()}
+        except Exception as e:
+            return {"simulators": [], "error": str(e)}
+
+    def _handle_simulator(self, data: dict) -> dict:
+        """处理模拟器控制命令。
+
+        cmd 格式:
+            {"action": "detect"}           — 重新检测
+            {"action": "start", "name": "mumu"}  — 启动
+            {"action": "stop", "name": "mumu"}   — 停止
+            {"action": "connect", "name": "mumu"} — ADB 连接
+        """
+        action = data.get("action", "detect")
+        name = data.get("name", "")
+
+        try:
+            from controller.simulator import get_simulator_manager
+            mgr = get_simulator_manager()
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+        if action == "detect":
+            sims = mgr.detect(force=True)
+            return {"ok": True, "simulators": mgr.to_dict()}
+
+        if not name:
+            return {"ok": False, "error": "缺少 name 参数"}
+
+        if action == "start":
+            ok = mgr.start(name)
+            return {"ok": ok, "simulator": name}
+
+        elif action == "stop":
+            ok = mgr.stop(name)
+            return {"ok": ok, "simulator": name}
+
+        elif action == "connect":
+            ok = mgr.connect_adb(name)
+            return {"ok": ok, "simulator": name}
+
+        return {"ok": False, "error": f"未知 action: {action}"}
 
     def _get_version(self) -> str:
         """获取版本号。"""

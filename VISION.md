@@ -395,7 +395,7 @@ pjsk-auto-player/
 
 **P1 (下周)**:
 4. [ ] **原生 Qt 桌面 GUI** — 从 WebView 逐步迁移到 PySide6/QML
-5. [ ] **模拟器管理** — MuMu/LDPlayer 自动检测 + 一键启停
+5. [x] **模拟器管理** — MuMu/LDPlayer 自动检测 + 一键启停 (v5.12.0)
 6. [x] **任务 DSL 原型** — 实现 @action 装饰器简化 Pipeline 任务编写 (v5.11.0)
 
 **P2 (本月)**:
