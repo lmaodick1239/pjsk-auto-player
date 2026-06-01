@@ -15,6 +15,7 @@ import sys
 import os
 import json
 import random
+import signal
 from typing import Optional
 
 import numpy as np
@@ -615,9 +616,15 @@ class AutoPlayer:
             logger.warning(f"获取屏幕分辨率失败: {e}")
 
         logger.info("测试截图...")
-        test_frame = self.adb.screencap()
+        test_frame = None
+        for attempt in range(3):
+            test_frame = self.adb.screencap()
+            if test_frame is not None:
+                break
+            logger.info(f"截图测试重试 {attempt + 1}/3...")
+            time.sleep(0.5)
         if test_frame is None:
-            logger.error("截图失败, 请检查设备和 ADB")
+            logger.error("截图失败 (3次重试), 请检查设备和 ADB")
             return False
         logger.info(f"截图成功: {test_frame.shape[1]}x{test_frame.shape[0]}")
 
@@ -1737,8 +1744,26 @@ class BatchPlayer:
             "total_game_time": 0.0,
         }
 
+    def _setup_signal_handlers(self) -> None:
+        """安装 SIGINT/SIGTERM 处理器，确保优雅退出。"""
+        def _handler(signum, frame):
+            logger.info(f"收到信号 {signum}, 正在优雅退出...")
+            self._running = False
+            if hasattr(self, 'player') and self.player:
+                self.player._running = False
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _handler)
+            except (ValueError, AttributeError):
+                # 非主线程或 Windows 不支持某些信号
+                pass
+
     def start(self) -> None:
         """启动连续执行。"""
+        # 注册信号处理器 (Unix: 收到 SIGTERM/SIGINT 时优雅退出)
+        self._setup_signal_handlers()
+
         # 先用 AutoPlayer 的 prepare 逻辑
         if not self.player._ensure_ready():
             return
@@ -2152,21 +2177,27 @@ class BatchPlayer:
         logger.info("─" * 40)
 
     def _append_song_history(self, song: dict):
-        """将一首歌的记录追加到历史文件。"""
+        """将一首歌的记录追加到历史文件（原子写入）。"""
         hist_file = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), ".song_history.json"
         )
         try:
             history = []
             if os.path.exists(hist_file):
-                with open(hist_file, "r") as f:
-                    history = json.load(f)
+                try:
+                    with open(hist_file, "r") as f:
+                        history = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    history = []  # 损坏文件, 重新开始
             history.append(song)
             # 只保留最近 200 条
             if len(history) > 200:
                 history = history[-200:]
-            with open(hist_file, "w") as f:
+            # 原子写入: 先写临时文件, 再 rename (POSIX 原子操作)
+            tmp_file = hist_file + ".tmp"
+            with open(tmp_file, "w") as f:
                 json.dump(history, f, indent=2)
+            os.replace(tmp_file, hist_file)
         except Exception:
             pass
 
@@ -2203,8 +2234,10 @@ class BatchPlayer:
             "version": "4.3.0",
         }
         try:
-            with open(stats_file, "w") as f:
+            tmp_file = stats_file + ".tmp"
+            with open(tmp_file, "w") as f:
                 json.dump(stats, f)
+            os.replace(tmp_file, stats_file)
         except OSError:
             pass
 

@@ -161,9 +161,10 @@ class ResourceExhaustedError(PjskError):
 
 # ── 错误恢复策略注册表 ──
 
-RecoveryStrategy = dict[str, dict]  # {error_code: {action, retry_delay, max_retries}}
+# Type alias for recovery strategies mapping: {error_code: {action, retry_delay, max_retries}}
+RecoveryStrategy = dict
 
-DEFAULT_RECOVERY_STRATEGIES: RecoveryStrategy = {
+DEFAULT_RECOVERY_STRATEGIES: dict[str, dict] = {
     "GAME_STUCK": {
         "action": "restart_app",
         "retry_delay": 3.0,

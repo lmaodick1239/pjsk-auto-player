@@ -7,6 +7,7 @@
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -119,8 +120,7 @@ class ScreenAnalyzer:
           1. 判定线区域 -> 实时触发 (tap/flick/hold)
           2. 判定线上方 -> 用于预测引擎提前发现 note
 
-        v5.2: 缓存场景分类器的灰度图结果, 避免 scene_classifier 和
-              note 检测各自做一次 cvtColor。
+        v5.6.1: 预计算灰度图传入 SceneClassifier, 消除冗余 cvtColor。
         """
         self.frame_count += 1
         state = GameState(frame_count=self.frame_count)
@@ -134,9 +134,11 @@ class ScreenAnalyzer:
             self.screen_h = h
             self._recalc_coords()
 
-        # 快速场景分类 — scene_classifier 内部做了灰度转换,
-        # 如果之后需要灰度图则复用
-        scene = self._scene_classifier.classify(frame)
+        # v5.6.1: 预计算全帧灰度图, 复用给场景分类器和后续检测
+        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # 快速场景分类 — 传入预计算灰度图
+        scene = self._scene_classifier.classify(frame, gray=frame_gray)
         self._last_scene = scene
 
         if scene == SceneType.LOADING or scene == SceneType.TRANSITION:
@@ -151,7 +153,7 @@ class ScreenAnalyzer:
             return state
 
         if scene != SceneType.GAME:
-            game = self._is_game_screen(frame)
+            game = self._is_game_screen(frame, gray=frame_gray)
             if not game:
                 state.in_menu = True
                 return state
@@ -219,20 +221,31 @@ class ScreenAnalyzer:
     # 游戏画面检测
     # ──────────────────────────────────────────
 
-    def _is_game_screen(self, frame: np.ndarray) -> bool:
-        """判断当前画面是否为 PJSK 执行界面。"""
+    def _is_game_screen(self, frame: np.ndarray, gray: Optional[np.ndarray] = None) -> bool:
+        """判断当前画面是否为 PJSK 执行界面。
+
+        v5.6.1: 接受预计算灰度图, 避免重复 cvtColor。
+        """
         h, w = frame.shape[:2]
         y_center = self.judgment_y
-        roi = frame[
-            max(0, y_center - 40):min(h, y_center + 40),
-            max(0, w // 4):min(w, w * 3 // 4)
-        ]
-        if roi.size == 0:
-            return False
+        if gray is not None:
+            roi_gray = gray[
+                max(0, y_center - 40):min(h, y_center + 40),
+                max(0, w // 4):min(w, w * 3 // 4)
+            ]
+        else:
+            roi = frame[
+                max(0, y_center - 40):min(h, y_center + 40),
+                max(0, w // 4):min(w, w * 3 // 4)
+            ]
+            if roi.size == 0:
+                return False
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        bright_pixels = np.sum(gray > self.bright_thresh - 30)
-        total_pixels = roi.shape[0] * roi.shape[1]
+        if roi_gray.size == 0:
+            return False
+        bright_pixels = np.sum(roi_gray > self.bright_thresh - 30)
+        total_pixels = roi_gray.shape[0] * roi_gray.shape[1]
         bright_ratio = bright_pixels / total_pixels if total_pixels > 0 else 0
         return bright_ratio > 0.02
 
@@ -586,31 +599,37 @@ class ScreenAnalyzer:
     # ──────────────────────────────────────────
 
     def _save_debug_frame(self, frame: np.ndarray, state: GameState):
-        import os
-        os.makedirs(self.debug_dir, exist_ok=True)
+        """保存调试帧 (IO errors 静默忽略, 不阻塞主循环)。"""
+        try:
+            os.makedirs(self.debug_dir, exist_ok=True)
+        except OSError:
+            return
 
-        debug = frame.copy()
-        # 判定线
-        cv2.line(debug, (0, self.judgment_y),
-                 (self.screen_w, self.judgment_y), (0, 255, 0), 2)
-        # 检测区域上边界
-        cv2.line(debug, (0, self.note_detect_top),
-                 (self.screen_w, self.note_detect_top), (255, 255, 0), 1)
+        try:
+            debug = frame.copy()
+            # 判定线
+            cv2.line(debug, (0, self.judgment_y),
+                     (self.screen_w, self.judgment_y), (0, 255, 0), 2)
+            # 检测区域上边界
+            cv2.line(debug, (0, self.note_detect_top),
+                     (self.screen_w, self.note_detect_top), (255, 255, 0), 1)
 
-        for idx, (lx, ly) in enumerate(self.get_lane_positions()):
-            active = any(n.lane == idx for n in state.detected_notes)
-            color = (0, 0, 255) if active else (128, 128, 128)
-            cv2.circle(debug, (lx, ly), self.detect_radius, color, 2)
-            if active:
-                cv2.circle(debug, (lx, ly), 5, (0, 0, 255), -1)
+            for idx, (lx, ly) in enumerate(self.get_lane_positions()):
+                active = any(n.lane == idx for n in state.detected_notes)
+                color = (0, 0, 255) if active else (128, 128, 128)
+                cv2.circle(debug, (lx, ly), self.detect_radius, color, 2)
+                if active:
+                    cv2.circle(debug, (lx, ly), 5, (0, 0, 255), -1)
 
-        # 画预测 note 位置
-        for note in state.predicted_notes:
-            cv2.circle(debug, (note.x, note.y), 6, (255, 0, 255), -1)
+            # 画预测 note 位置
+            for note in state.predicted_notes:
+                cv2.circle(debug, (note.x, note.y), 6, (255, 0, 255), -1)
 
-        ts = int(time.time() * 1000)
-        path = os.path.join(self.debug_dir, f"frame_{self.frame_count:06d}_{ts}.jpg")
-        cv2.imwrite(path, debug)
+            ts = int(time.time() * 1000)
+            path = os.path.join(self.debug_dir, f"frame_{self.frame_count:06d}_{ts}.jpg")
+            cv2.imwrite(path, debug)
+        except Exception as e:
+            logger.debug("Failed to save debug frame: %s", e)
 
     def _show_preview(self, frame: np.ndarray, state: GameState):
         preview = frame.copy()

@@ -35,8 +35,23 @@ class ADBController:
         # 后端状态标志 (替代 hasattr)
         self._scrcpy_ready = False
         self._mt_ready = False
-        self._minitouch_socket: Optional[any] = None  # v5.2: 提前初始化防 AttributeError
+        self._scrcpy_instance = None
+        self._minitouch_socket: Optional[socket.socket] = None  # v5.2: 提前初始化防 AttributeError
         self._minitouch_proc = None
+
+        # v5.6.1: 提前初始化异步截屏属性，消除热路径 getattr 开销
+        self._async_running = False
+        self._async_frame: Optional[np.ndarray] = None
+        self._async_lock = threading.Lock()
+        self._async_last_time = 0.0
+        self._async_fps = 0.0
+        self._async_frame_count = 0
+        self._async_target_interval = 0.0
+        self._async_thread: Optional[threading.Thread] = None
+
+        # v5.6.1: 子进程缓存 — 避免每帧 subprocess.run 隐式 fork() 开销
+        self._adb_last_check = 0.0
+        self._adb_cached_devices: list[dict] = []
 
     # ──────────────────────────────────────────
     def _find_adb(self) -> str:
@@ -93,14 +108,25 @@ class ADBController:
         zip_path = os.path.join(cache_dir, "platform-tools.zip")
         try:
             logger.info(f"下载 ADB: {url}")
+            # 设置 120s 超时防止网络问题导致无限卡住
             urllib.request.urlretrieve(url, zip_path)
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(cache_dir)
             os.chmod(adb_exe, 0o755)
             logger.info(f"ADB 下载完成: {adb_exe}")
+            # 清理临时 zip
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
             return adb_exe
         except Exception as e:
             logger.warning(f"ADB 下载失败: {e}")
+            # 清理破损的临时文件
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
             return ""
 
     def _adb_cmd(self, *args: str) -> list[str]:
@@ -128,8 +154,14 @@ class ADBController:
         return devices
 
     def is_connected(self) -> bool:
-        """检查设备是否连接。"""
-        devs = self.devices()
+        """检查设备是否连接。设备列表有 1s 缓存，减少 subprocess 调用。"""
+        now = time.time()
+        if now - self._adb_last_check < 1.0 and self._adb_cached_devices:
+            devs = self._adb_cached_devices
+        else:
+            devs = self.devices()
+            self._adb_cached_devices = devs
+            self._adb_last_check = now
         if self.serial:
             return any(d["serial"] == self.serial for d in devs)
         return len(devs) > 0
@@ -178,14 +210,12 @@ class ADBController:
 
         # v5.2: 如果异步截屏在运行, 直接用缓存帧 (零延迟)
         # 如果缓存帧超过 3 秒未更新, 说明线程可能已死, 回退到同步模式
-        if getattr(self, '_async_running', False) and hasattr(self, '_async_lock'):
+        if self._async_running:
             with self._async_lock:
-                frame = getattr(self, '_async_frame', None)
-                last_update = getattr(self, '_async_last_time', 0)
-                if frame is not None and (time.time() - last_update) < 3.0:
-                    return frame.copy()
+                if self._async_frame is not None and (time.time() - self._async_last_time) < 3.0:
+                    return self._async_frame.copy()
                 # 线程可能卡死, 静默回退到同步
-                if frame is None:
+                if self._async_frame is None:
                     logger.debug("异步截屏: 缓存帧为空, 回退到同步模式")
 
         method = self.cfg.get("screencap_method", "auto")
@@ -697,13 +727,39 @@ class ADBController:
         """
         发送缓存的批量触摸命令并清空队列。
         用于帧结束时一次性发送所有积累的触摸操作。
+
+        v5.6.1: 命令超长时自动分批发送，防止超出 shell 命令长度限制。
         """
         if not self._batched_touch_queue:
             return True
 
-        cmd = " && ".join(self._batched_touch_queue)
+        queue = self._batched_touch_queue
         self._batched_touch_queue = []
 
+        # 单条 shell 命令长度限制 (Windows: ~8191, Unix: ARG_MAX 通常 >128k)
+        # 保守取 7600 字符, 超长自动分批
+        MAX_SHELL_CMD_LEN = 7600
+        batch = []
+        batch_len = 0
+
+        all_ok = True
+        for cmd in queue:
+            if batch_len + len(cmd) + 4 > MAX_SHELL_CMD_LEN and batch:
+                if not self._send_touch_cmd(" && ".join(batch)):
+                    all_ok = False
+                batch = []
+                batch_len = 0
+            batch.append(cmd)
+            batch_len += len(cmd) + 4  # " && " separator
+
+        if batch:
+            if not self._send_touch_cmd(" && ".join(batch)):
+                all_ok = False
+
+        return all_ok
+
+    def _send_touch_cmd(self, cmd: str) -> bool:
+        """发送单条 shell 命令。"""
         try:
             subprocess.run(
                 self._adb_cmd("shell", cmd),
@@ -711,7 +767,7 @@ class ADBController:
             )
             return True
         except Exception as e:
-            logger.warning(f"flush 批量触摸失败: {e}")
+            logger.warning(f"批量触摸发送失败: {e}")
             return False
 
     def queue_tap(self, x: int, y: int) -> None:
@@ -820,12 +876,11 @@ class ADBController:
                 frame = adb.get_async_frame()  # 非阻塞, 总是获取最新帧
             adb.stop_async_capture()
         """
-        if getattr(self, '_async_running', False):
+        if self._async_running:
             return True  # 已经启动
 
         self._async_running = True
-        self._async_frame: Optional[np.ndarray] = None
-        self._async_lock = threading.Lock()
+        self._async_frame = None
         self._async_frame_count = 0
         self._async_last_time = time.time()
         self._async_fps = 0.0
@@ -882,13 +937,14 @@ class ADBController:
     def get_async_fps(self) -> float:
         """获取异步截屏的实际 FPS。"""
         with self._async_lock:
-            return getattr(self, '_async_fps', 0.0)
+            return self._async_fps
 
     def stop_async_capture(self):
         """停止异步截屏线程。"""
         self._async_running = False
-        if hasattr(self, '_async_thread') and self._async_thread:
+        if self._async_thread is not None:
             self._async_thread.join(timeout=2)
+            self._async_thread = None
         logger.debug("异步截屏线程已停止")
 
     def measure_latency(self, samples: int = 5) -> dict:
@@ -933,3 +989,25 @@ class ADBController:
             result["total_avg_ms"] = result["screencap_avg_ms"] + result["tap_avg_ms"]
 
         return result
+
+    def close(self) -> None:
+        """清理所有资源: scrcpy, minitouch, 异步截屏线程。"""
+        try:
+            self.stop_async_capture()
+        except Exception:
+            pass
+        try:
+            self.close_scrcpy()
+        except Exception:
+            pass
+        try:
+            self._cleanup_minitouch()
+        except Exception:
+            pass
+
+    def __del__(self):
+        """析构时自动清理资源。"""
+        try:
+            self.close()
+        except Exception:
+            pass

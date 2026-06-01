@@ -8,6 +8,8 @@ import logging
 import re
 from typing import Optional
 
+import cv2
+
 logger = logging.getLogger("pjsk_ocr")
 
 
@@ -116,7 +118,6 @@ class OcrReader:
             return None
 
         # 放大以便 OCR 识别
-        import cv2
         scale = 2.0
         roi = cv2.resize(roi, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         # 转灰度 + 二值化
@@ -137,8 +138,11 @@ class OcrReader:
                                                 width_ths=0.5)
                 return " ".join(results)
             else:
-                # pytesseract
-                import pytesseract
+                # pytesseract (lazy import)
+                try:
+                    import pytesseract
+                except ImportError:
+                    return ""
                 custom_config = "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789PERFECTGREATGOODBADMISSCOMBO"
                 text = pytesseract.image_to_string(image, config=custom_config)
                 return text.strip()

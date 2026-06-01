@@ -308,7 +308,11 @@ class TaskScheduler:
         Returns:
             执行结果, 如果没有符合条件的任务则返回 None
         """
-        ctx = context or (self._context_provider() if self._context_provider else {})
+        try:
+            ctx = context or (self._context_provider() if self._context_provider else {})
+        except Exception as e:
+            logger.error(f"[Scheduler] context_provider 异常: {e}")
+            return None
 
         entry = self.get_next_task(ctx)
         if entry is None:

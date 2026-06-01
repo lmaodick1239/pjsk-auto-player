@@ -55,3 +55,14 @@ dmg-root/
 
 # Cache
 .cache/
+.pytype/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime artifacts
+.song_history.json
+.batch_stats.json
+debug_output/
+calibration_result.jpg
+__temp_ss_*.png
+*.tmp

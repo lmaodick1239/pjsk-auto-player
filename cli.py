@@ -27,8 +27,13 @@ if ROOT_DIR not in sys.path:
 
 
 def setup_logging(level: str = "INFO"):
+    """配置日志, 带健全的 level 回退。"""
+    try:
+        log_level = getattr(logging, level.upper())
+    except AttributeError:
+        log_level = logging.INFO
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )

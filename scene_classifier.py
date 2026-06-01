@@ -59,7 +59,7 @@ class SceneClassifier:
         self._last_classify_time = 0
         self._cache_ttl = 0.05  # 50ms 内复用结果
 
-    def classify(self, frame: np.ndarray) -> SceneType:
+    def classify(self, frame: np.ndarray, gray: Optional[np.ndarray] = None) -> SceneType:
         """
         快速分类画面 (平均 <1ms)。
 
@@ -72,6 +72,7 @@ class SceneClassifier:
 
         v5.2: 修复 TTL 缓存竞态 — 帧哈希验证前置到 TTL 检查之前,
               杜绝场景切换时返回 50ms 前的过时结果。
+        v5.6.1: 接受可选的预计算灰度图, 避免 cvtColor 重复计算。
         """
         if frame is None:
             return SceneType.UNKNOWN
@@ -100,7 +101,8 @@ class SceneClassifier:
         self._last_classify_time = now
 
         # ── 步骤 1: 检测加载/黑屏 (最便宜) ──
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if gray is None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         overall_mean = np.mean(gray)
 
         if overall_mean < 10:

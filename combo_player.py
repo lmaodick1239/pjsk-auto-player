@@ -18,6 +18,7 @@
 import json
 import logging
 import os
+import signal
 import time
 from typing import Optional
 
@@ -86,6 +87,20 @@ class ComboPlayer:
             "total_taps": 0, "total_flicks": 0, "total_holds": 0,
             "total_frames": 0, "start_time": 0.0, "total_game_time": 0.0,
         }
+
+    def _setup_signal_handlers(self) -> None:
+        """安装 SIGINT/SIGTERM 处理器，确保优雅退出。"""
+        def _handler(signum, frame):
+            logger.info(f"收到信号 {signum}, 正在优雅退出...")
+            self._running = False
+            if hasattr(self, 'player') and self.player:
+                self.player._running = False
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _handler)
+            except (ValueError, AttributeError):
+                pass
 
     def _load_combo(self, name: str):
         """加载歌单。"""
@@ -167,6 +182,9 @@ class ComboPlayer:
 
     def start(self):
         """启动歌单播放。"""
+        # 安装信号处理器
+        self._setup_signal_handlers()
+
         if not self.player._ensure_ready():
             return
 
@@ -264,12 +282,14 @@ class ComboPlayer:
                 logger.info("等待超时, 停止")
                 break
 
+            song_combo_start = time.time()
             stats = self._play_one()
             if stats:
                 self._batch_stats["songs_played"] += 1
                 for k in ("taps", "flicks", "holds", "frames"):
                     self._batch_stats[f"total_{k}"] += stats.get(k, 0)
-                self._batch_stats["total_game_time"] += time.time()
+                self._batch_stats["total_game_time"] += stats.get("duration",
+                    time.time() - song_combo_start)
                 self._write_stats()
                 logger.info(f"✅ {song_name} 完成")
             else:
@@ -400,12 +420,14 @@ class ComboPlayer:
             #       确保随机化 (位置抖动 / 漏键) 和 flick/hold 预测正确处理
             self.player._process_frame(state)
 
+        game_duration = time.time() - song_start
         self.player._release_all()
         return {
             "taps": self.player._stats["taps"],
             "flicks": self.player._stats["flicks"],
             "holds": self.player._stats["holds"],
             "frames": self.player._stats["frames"],
+            "duration": game_duration,
         }
 
     def _handle_result(self):
@@ -450,8 +472,10 @@ class ComboPlayer:
             "version": "3.6.0",
         }
         try:
-            with open(stats_file, "w") as f:
+            tmp_file = stats_file + ".tmp"
+            with open(tmp_file, "w") as f:
                 json.dump(stats, f)
+            os.replace(tmp_file, stats_file)
         except OSError:
             pass
 
