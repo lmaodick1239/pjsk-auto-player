@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.11.0] - 2026-06-01
+
+### 🗣️ Pipeline DSL 声明式任务原型
+
+#### `pipeline/dsl.py` — 装饰器驱动的任务定义
+- **@task**: 注册 Pipeline 任务 (设置名称和动作类型)
+- **@algorithm**: 设置识别算法 (DirectHit / OcrDetect / BrightnessDetect / ColorDetect / TemplateMatch)
+- **@retry**: 最大重试次数
+- **@delay**: 前后延迟 (pre / post, 毫秒)
+- **@next_step**: 成功跳转目标
+- **@failed_next**: 失败跳转目标
+- **@exceeded_next**: 重试耗尽跳转目标
+- **@roi**: 识别区域
+- **@subtasks**: 并行子任务
+
+#### TaskRegistry — 任务注册表
+- `register(func)`: 注册被 @task 装饰的函数
+- `to_dict()` / `to_json()`: 导出为 Pipeline V2 JSON 兼容格式
+- `save(path)`: 直接保存到文件
+- `create_click_task()` / `create_wait_task()`: 工厂方法，无需定义函数
+
+#### 集成
+- `pipeline/__init__.py` 导出所有 DSL 符号
+- 生成的 JSON 完全兼容现有 Pipeline V2 引擎
+
 ## [5.10.0] - 2026-06-01
 
 ### ⚡ Benchmark 面板

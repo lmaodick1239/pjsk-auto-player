@@ -28,6 +28,21 @@ from .plugins import (
 )
 from .task_data import TaskDataLoader, TaskData
 from .scheduler import TaskScheduler, ScheduleEntry, SchedulePriority
+from .dsl import (
+    TaskMeta,
+    TaskRegistry,
+    task,
+    algorithm,
+    retry,
+    delay,
+    next_step,
+    failed_next,
+    exceeded_next,
+    roi,
+    subtasks,
+    create_click_task,
+    create_wait_task,
+)
 
 __all__ = [
     "AbstractTask",
@@ -48,4 +63,17 @@ __all__ = [
     "TaskScheduler",
     "ScheduleEntry",
     "SchedulePriority",
+    "TaskMeta",
+    "TaskRegistry",
+    "task",
+    "algorithm",
+    "retry",
+    "delay",
+    "next_step",
+    "failed_next",
+    "exceeded_next",
+    "roi",
+    "subtasks",
+    "create_click_task",
+    "create_wait_task",
 ]
