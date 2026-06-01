@@ -16,6 +16,7 @@ on:
     branches: [main, master]
     paths-ignore:
       - "*.md"
+      - "VISION.md"
       - ".github/**"
       - "scripts/**"
       - "tests/**"

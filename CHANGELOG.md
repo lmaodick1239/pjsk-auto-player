@@ -5,6 +5,27 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/),
 版本号遵循 [Semantic Versioning](https://semver.org/).
 
+## [5.9.0] - 2026-06-01
+
+### 🔧 CI/CD 完善
+
+#### build.spec 同步
+- 添加 `pydantic` + `config.models` 到 hiddenimports
+- 确保 PyInstaller 本地构建与 CI 构建一致
+
+#### CI 增强 (ci.yml)
+- **Pydantic 配置模型校验**: lint job 新增 Pydantic 模型完整性验证步骤
+  (默认值生成、序列化往返、错误值捕获)
+- lint job 安装 pydantic 依赖
+
+#### Release 安全增强 (build.yml)
+- **SHA256 checksums**: Release 页面附带 `SHA256SUMS.txt`
+  包含所有平台产物的 SHA256 校验和，用户可验证下载完整性
+- Release artifacts 列表新增 SHA256SUMS.txt
+
+#### 自动发布优化 (auto-release.yml)
+- 新增 `VISION.md` 到 paths-ignore，vision 文档变更不再触发自动 tag
+
 ## [5.8.0] - 2026-06-01
 
 ### 🧬 Pydantic 配置校验 (Config V2.1)

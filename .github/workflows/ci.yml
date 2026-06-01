@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ruff
+          pip install ruff pydantic
 
       - name: Lint with ruff
         run: |
@@ -30,6 +30,29 @@ jobs:
         run: |
           python -m py_compile $(find . -name "*.py" -not -path "./.git/*" -not -path "./__pycache__/*" -not -path "./.pytest_cache/*" -not -path "./tests/*") 2>&1 || true
           echo "Compile check done"
+
+      - name: Validate config models (Pydantic)
+        run: |
+          python -c "
+          from config.models import PjskConfig
+          c = PjskConfig()
+          d = c.model_dump()
+          assert len(d) >= 14, f'Expected >=14 sections, got {len(d)}'
+          print(f'Config model OK: {len(d)} sections')
+          # Verify round-trip
+          c2 = PjskConfig.from_dict(d)
+          assert c2.model_dump() == d
+          print('Round-trip OK')
+          # Verify validation catches bad values
+          from config.models import AdbConfig
+          try:
+              AdbConfig.model_validate({'max_reconnect_attempts': -1})
+              print('ERROR: should have raised')
+              exit(1)
+          except Exception:
+              print('Bad-value validation OK')
+          print('All validations PASSED')
+          "
 
   test:
     name: Test (Python ${{ matrix.python }})

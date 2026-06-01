@@ -220,6 +220,21 @@ jobs:
           done
           printf "assets<<ASSETS_EOF\n$ASSETS\nASSETS_EOF\n" >> $GITHUB_OUTPUT
 
+      - name: Generate SHA256 checksums
+        run: |
+          CHECKSUM_FILE="SHA256SUMS.txt"
+          echo "# PJSK Auto Player v${{ steps.tag.outputs.version }} — SHA256 Checksums" > "$CHECKSUM_FILE"
+          echo "# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$CHECKSUM_FILE"
+          echo "" >> "$CHECKSUM_FILE"
+          for f in pjsk-auto-player-linux-x86_64 pjsk-auto-player-macos-universal pjsk-auto-player-windows-x86_64.exe pjsk-auto-player-macos-universal.dmg; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" >> "$CHECKSUM_FILE"
+            fi
+          done
+          echo "::group::SHA256 Checksums"
+          cat "$CHECKSUM_FILE"
+          echo "::endgroup::"
+
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
@@ -231,6 +246,7 @@ jobs:
             pjsk-auto-player-macos-universal
             pjsk-auto-player-windows-x86_64.exe
             pjsk-auto-player-macos-universal.dmg
+            SHA256SUMS.txt
             README.md
             TERMS.md
             CHANGELOG.md

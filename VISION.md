@@ -391,7 +391,7 @@ pjsk-auto-player/
 | **P0 (本周)**:
 1. [x] **i18n 国际化框架** — 抽取字符串到 `locale/zh_CN.json`，支持中/英/日 (v5.1.0)
 2. [x] **Pydantic 配置校验** — 替换现有 Schema 为 Pydantic models (v5.8.0)
-3. [ ] **CI/CD 完善** — `.github/workflows/release.yml` 三平台构建
+3. [x] **CI/CD 完善** — build.spec 同步 + CI 模型校验 + SHA256 checksums (v5.9.0)
 
 **P1 (下周)**:
 4. [ ] **原生 Qt 桌面 GUI** — 从 WebView 逐步迁移到 PySide6/QML
