@@ -48,9 +48,9 @@ class ScrcpyController(BaseController):
         # scrcpy settings
         self.executable = self._find_scrcpy(scrcpy_cfg.get("executable", "scrcpy"))
         self.serial = (adb_cfg.get("device_serial") or "").strip()
-        self._max_fps = scrcpy_cfg.get("max_fps", 60)
-        self._bit_rate = scrcpy_cfg.get("bit_rate", 8_000_000)
-        self._scale = scrcpy_cfg.get("scale", 0.5)
+        self._max_fps = self._coerce_int(scrcpy_cfg.get("max_fps", 60), 60)
+        self._bit_rate = self._coerce_int(scrcpy_cfg.get("bit_rate", 8_000_000), 8_000_000)
+        self._scale = self._coerce_float(scrcpy_cfg.get("scale", 0.5), 0.5)
         self._frame_skip = scrcpy_cfg.get("frame_skip", True)
 
         # scrcpy process & frame state
@@ -79,7 +79,7 @@ class ScrcpyController(BaseController):
         self._mt_max_y = 2400
         self._mt_scale_x = 1.0
         self._mt_scale_y = 1.0
-        self._mt_port = config.get("minitouch", {}).get("port", 1111)
+        self._mt_port = self._coerce_int(config.get("minitouch", {}).get("port", 1111), 1111)
         self._mt_binary_path = config.get("minitouch", {}).get("binary_path", "")
 
         self._connected = False

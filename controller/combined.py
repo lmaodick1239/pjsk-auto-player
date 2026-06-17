@@ -75,12 +75,14 @@ class CombinedController(BaseController):
 
         # Performance tracking for auto-switching
         self._last_switch_time = 0.0
-        self._switch_cooldown = config.get("controller", {}).get(
-            "switch_cooldown", 30.0
+        self._switch_cooldown = self._coerce_float(
+            config.get("controller", {}).get("switch_cooldown", 30.0),
+            30.0,
         )
         self._screencap_times: list[float] = []
-        self._perf_sample_size = config.get("controller", {}).get(
-            "perf_sample_size", 10
+        self._perf_sample_size = self._coerce_int(
+            config.get("controller", {}).get("perf_sample_size", 10),
+            10,
         )
 
         # Auto-detect available backends
@@ -88,6 +90,14 @@ class CombinedController(BaseController):
         self._detect_backends()
 
         self._connected = False
+
+    @staticmethod
+    def _debug_exception(e: Exception) -> None:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        if exc_tb is not None:
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            print(exc_type, fname, exc_tb.tb_lineno)
+        print(e)
 
     # ── Backend Detection ──────────────────────────────────────
 
@@ -128,6 +138,10 @@ class CombinedController(BaseController):
             )
             return result.returncode == 0
         except Exception:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            if exc_tb is not None:
+                fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+                print(exc_type, fname, exc_tb.tb_lineno)
             return False
 
     # ── Lifecycle ──────────────────────────────────────────────
@@ -155,6 +169,7 @@ class CombinedController(BaseController):
                                     name, meta["description"])
                         return True
                 except Exception as e:
+                    self._debug_exception(e)
                     logger.warning("Backend '%s' connect failed: %s", name, e)
 
             logger.error("All backends failed to connect")
@@ -168,6 +183,7 @@ class CombinedController(BaseController):
                 try:
                     self._active_backend.disconnect()
                 except Exception as e:
+                    self._debug_exception(e)
                     logger.warning("Backend '%s' disconnect error: %s",
                                    self._active_name, e)
                 self._active_backend = None
@@ -213,6 +229,7 @@ class CombinedController(BaseController):
                                         name, meta["description"])
                             return True
                     except Exception as e:
+                        self._debug_exception(e)
                         logger.error("Failed to switch to backend '%s': %s", name, e)
                     return False
             logger.warning("Backend '%s' not found in available backends", name)
@@ -241,7 +258,8 @@ class CombinedController(BaseController):
                 # The better backend is now available — switch
                 logger.info("Auto-switching to better backend '%s'", best_name)
                 return self.switch_backend(best_name)
-        except Exception:
+        except Exception as e:
+            self._debug_exception(e)
             pass
         return False
 
@@ -283,6 +301,7 @@ class CombinedController(BaseController):
                 return frame
 
             except Exception as e:
+                self._debug_exception(e)
                 logger.error("Backend '%s' screencap error: %s", self._active_name, e)
                 return None
 
@@ -295,6 +314,7 @@ class CombinedController(BaseController):
             try:
                 return self._active_backend.click(x, y)
             except Exception as e:
+                self._debug_exception(e)
                 logger.error("Backend '%s' click error: %s", self._active_name, e)
                 return False
 
@@ -308,6 +328,7 @@ class CombinedController(BaseController):
             try:
                 return self._active_backend.swipe(x1, y1, x2, y2, duration_ms)
             except Exception as e:
+                self._debug_exception(e)
                 logger.error("Backend '%s' swipe error: %s", self._active_name, e)
                 return False
 
@@ -328,6 +349,7 @@ class CombinedController(BaseController):
                 try:
                     return self._active_backend.shell(command)
                 except Exception as e:
+                    self._debug_exception(e)
                     logger.error("Backend '%s' shell error: %s", self._active_name, e)
             return False
 
@@ -423,6 +445,7 @@ class CombinedController(BaseController):
                     name, avg, 1000 / avg if avg > 0 else 0, len(times),
                 )
             except Exception as e:
+                self._debug_exception(e)
                 results[name] = {"error": str(e)}
                 logger.warning("Benchmark '%s' failed: %s", name, e)
 

@@ -346,7 +346,7 @@ game_settings:
 # ============================================================
 debug:
   # 日志级别: DEBUG, INFO, WARNING, ERROR
-  log_level: "INFO"
+  log_level: "DEBUG"
 
   # 是否保存检测截图 (用于调试, 保存在 debug_output/ 目录)
   save_debug_frames: false

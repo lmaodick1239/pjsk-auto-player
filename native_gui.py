@@ -16,7 +16,7 @@ PJSK Auto Player — 原生桌面 GUI (Native GUI)
 """
 
 from __future__ import annotations
-
+import sys
 import logging
 import os
 import queue
@@ -26,6 +26,9 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 from pathlib import Path
 from typing import Optional
+
+from config import load_config
+from logging_utils import setup_logging as configure_logging
 
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,7 +52,7 @@ class Theme:
     WARNING    = "#ff9100"   # 警告橙
     ERROR      = "#ff1744"   # 错误红
     BORDER     = "#2a2a4a"   # 边框
-    _IS_MAC = hasattr(os, 'uname') and Theme._IS_MAC
+    _IS_MAC = sys.platform == "darwin"
     FONT       = ("SF Mono" if _IS_MAC else "Consolas", 11)
     FONT_SM    = ("SF Mono" if _IS_MAC else "Consolas", 10)
     FONT_TITLE = ("SF Pro Display" if _IS_MAC else "Segoe UI", 14, "bold")
@@ -102,6 +105,14 @@ class GuiLogHandler(logging.Handler):
         self.log_queue.put(level, msg)
 
 
+def _debug_exception(e: Exception) -> None:
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    if exc_tb is not None:
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        print(exc_type, fname, exc_tb.tb_lineno)
+    print(e)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 主窗口
 # ═══════════════════════════════════════════════════════════════
@@ -112,8 +123,9 @@ class PjskGui:
     像 MAA 一样：顶部工具栏 + 左侧状态面板 + 右侧日志面板。
     """
 
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 8080, log_level: str | None = None):
         self.port = port
+        self.log_level = log_level
         self.log_queue = LogQueue()
         self._app_instance = None
         self._server_thread = None
@@ -384,13 +396,14 @@ class PjskGui:
 
     def _setup_logging(self):
         """设置日志处理器，将日志输出到 GUI。"""
+        cfg = load_config()
+        configure_logging(cfg, level=self.log_level)
         handler = GuiLogHandler(self.log_queue)
         handler.setFormatter(
             logging.Formatter("%(message)s")
         )
         root_logger = logging.getLogger()
         root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
 
     def _init_backend(self):
         """初始化后台 PjskApp 实例。"""
@@ -404,6 +417,7 @@ class PjskGui:
             # 连接设备
             self._connect_device()
         except Exception as e:
+            _debug_exception(e)
             self.log_queue.put("error", f"❌ 后端初始化失败: {e}")
 
     # ── 操作 ──────────────────────────────────────
@@ -438,6 +452,7 @@ class PjskGui:
                         "  3. 已授权此电脑")
                     self.status_var.set("🔴 未连接")
             except Exception as e:
+                _debug_exception(e)
                 self.log_queue.put("error", f"❌ 连接异常: {e}")
                 self.status_var.set("🔴 错误")
 
@@ -464,6 +479,7 @@ class PjskGui:
             try:
                 self._app_instance.run(mode=mode)
             except Exception as e:
+                _debug_exception(e)
                 self.log_queue.put("error", f"❌ 执行异常: {e}")
             finally:
                 self._running = False
@@ -506,6 +522,7 @@ class PjskGui:
                 self._app_instance.calibrate()
                 self.log_queue.put("success", "✅ 校准完成")
         except Exception as e:
+            _debug_exception(e)
             self.log_queue.put("error", f"❌ 校准失败: {e}")
 
     def _run_setup(self):
@@ -519,6 +536,7 @@ class PjskGui:
             wizard.run()
             self.log_queue.put("success", "✅ 设置完成")
         except Exception as e:
+            _debug_exception(e)
             self.log_queue.put("error", f"❌ 设置失败: {e}")
 
     def _edit_config(self):
@@ -587,7 +605,8 @@ class PjskGui:
             self.stats_widgets["clicks_var"].set(str(s.get("clicks", 0)))
             self.stats_widgets["fps_var"].set(f"{s.get('fps', 0):.0f} FPS")
             self.stats_widgets["errors_var"].set(str(s.get("errors", 0)))
-        except Exception:
+        except Exception as e:
+            _debug_exception(e)
             pass
 
     # ── 关闭 ──────────────────────────────────────
@@ -615,9 +634,11 @@ def main():
     parser = argparse.ArgumentParser(description="PJSK Auto Player — 原生桌面 GUI")
     parser.add_argument("--web", type=int, default=0, help="同时启动 Web 服务器 (端口)")
     parser.add_argument("--port", type=int, default=8080, help="Web 服务器端口")
+    parser.add_argument("--log-level", default=None, help="覆盖日志级别 (DEBUG/INFO/WARNING/ERROR)")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO)
+    cfg = load_config()
+    configure_logging(cfg, level=args.log_level)
 
     # 可选：同时启动 Web 服务器
     if args.web:
@@ -626,7 +647,7 @@ def main():
         start_web_server(port)
         print(f"🌐 Web 服务器: http://localhost:{port}")
 
-    gui = PjskGui(port=args.port or args.web or 8080)
+    gui = PjskGui(port=args.port or args.web or 8080, log_level=args.log_level)
     gui.run()
 
 

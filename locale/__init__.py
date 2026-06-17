@@ -7,8 +7,11 @@ Usage:
     set_lang('ja_JP')
     print(t('play.start'))  # → 'ライブ開始'
 """
+import builtins
+import importlib.util
 import json
 import os
+import sysconfig
 from typing import Dict, Any
 
 _LOCALE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +19,36 @@ _DEFAULT_LANG = 'zh_CN'
 _current_lang = _DEFAULT_LANG
 _translations: Dict[str, Dict[str, str]] = {}
 _fallback: Dict[str, str] = {}
+
+
+def _load_stdlib_locale():
+    """Load the standard-library locale module without shadowing this package."""
+    stdlib_dir = sysconfig.get_path("stdlib")
+    if not stdlib_dir:
+        return None
+
+    path = os.path.join(stdlib_dir, "locale.py")
+    if not os.path.exists(path):
+        return None
+
+    spec = importlib.util.spec_from_file_location("_stdlib_locale", path)
+    if spec is None or spec.loader is None:
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_stdlib_locale = _load_stdlib_locale()
+_stdlib_public_names = []
+if _stdlib_locale is not None:
+    for name in dir(_stdlib_locale):
+        if name.startswith("_"):
+            continue
+        _stdlib_public_names.append(name)
+        if name not in globals():
+            globals()[name] = getattr(_stdlib_locale, name)
 
 
 def _load_lang(lang: str) -> Dict[str, str]:
@@ -36,9 +69,9 @@ def _load_lang(lang: str) -> Dict[str, str]:
                 if isinstance(v, dict):
                     flatten(v, key)
                 else:
-                    result[key] = str(v)
+                        result[key] = builtins.str(v)
         elif isinstance(obj, (str, int, float, bool)):
-            result[prefix] = str(obj)
+                    result[prefix] = builtins.str(obj)
 
     flatten(data)
     return result
@@ -101,6 +134,13 @@ def get_available_langs() -> list:
         if f.endswith('.json') and not f.startswith('_'):
             langs.append(f[:-5])
     return sorted(langs)
+
+
+__all__ = sorted(set(_stdlib_public_names + [
+    't',
+    'set_lang',
+    'get_available_langs',
+]))
 
 
 # Auto-load default on import

@@ -45,9 +45,29 @@ class BaseController(ABC):
                 }
         """
         self.config = config
-        self._screen_width: int = config.get("screen", {}).get("width", 1080)
-        self._screen_height: int = config.get("screen", {}).get("height", 2400)
+        self._screen_width = self._coerce_int(
+            config.get("screen", {}).get("width", 1080),
+            1080,
+        )
+        self._screen_height = self._coerce_int(
+            config.get("screen", {}).get("height", 2400),
+            2400,
+        )
         self._connected: bool = False
+
+    @staticmethod
+    def _coerce_int(value, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_float(value, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     # ── Lifecycle ──────────────────────────────────────────────
 

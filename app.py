@@ -4,7 +4,7 @@ PJSK Auto Player — 应用主类 (Application Manager)
 协调所有模块: 配置 → 控制器 → 识别 → Pipeline → Web GUI
 支持 CLI/Web/Daemon 三种运行模式。
 """
-
+import sys
 import logging
 import os
 import threading
@@ -27,6 +27,14 @@ import cv2  # v5.7.1: 模块级导入, 避免热路径 import
 from recovery import ObstructionEngine
 
 logger = logging.getLogger("pjsk.app")
+
+
+def _debug_exception(e: Exception) -> None:
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    if exc_tb is not None:
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        print(exc_type, fname, exc_tb.tb_lineno)
+    print(e)
 
 
 class PjskApp:
@@ -71,8 +79,8 @@ class PjskApp:
         self._capture_optimizer: Optional[CaptureOptimizer] = None
         try:
             self._capture_optimizer = CaptureOptimizer(self.config)
-        except Exception:
-            pass
+        except Exception as e:
+            _debug_exception(e)
 
         # v5.4: 任务缓存 (避免每帧重新创建 ProcessTask)
         self._task_cache: dict[str, ProcessTask] = {}
@@ -83,29 +91,42 @@ class PjskApp:
 
     def initialize(self):
         """初始化所有后端。"""
+        print("🔧 初始化中...")
         if self._backend_initialized:
             return
         logger.info("Initializing PJSK Auto Player...")
+        print("67")
         self._init_controller()
+        # print("✅ 控制器已连接")
         self._backend_initialized = True
         # v5.5: 初始化阻塞检测引擎
         try:
             from recovery import ObstructionEngine
+            print("🔧 初始化阻塞检测引擎...")
             self._obstruction_engine = ObstructionEngine(self.controller, self.config)
             logger.info("ObstructionEngine initialized")
         except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            print(exc_type, fname, exc_tb.tb_lineno)
+            print(e)
             logger.warning("ObstructionEngine init failed: %s", e)
+            # print(f"Error loading from {filename}")
 
         logger.info("Initialization complete")
 
     def _init_controller(self):
         """初始化设备控制器。"""
+        print("🔧 初始化控制器...")
         from controller.combined import CombinedController  # 延迟导入避免循环依赖
+        print(" GOT CombinedController")
         try:
+            
             self.controller = CombinedController(self.config)
             self.controller.connect()
             logger.info("Controller connected")
         except Exception as e:
+            _debug_exception(e)
             logger.error("Controller init failed: %s", e)
             raise
 
@@ -326,6 +347,7 @@ class PjskApp:
             except PjskError as e:
                 self._handle_error(e)
             except Exception as e:
+                _debug_exception(e)
                 logger.error("Unexpected error: %s", e, exc_info=True)
                 with self._lock:
                     self.stats["errors"] += 1
@@ -396,6 +418,7 @@ class PjskApp:
                 self.controller.app_start("com.sega.pjsekai")
             time.sleep(5.0)
         except Exception as e:
+            _debug_exception(e)
             logger.error("Restart app failed: %s", e)
 
     def _recovery_force_restart(self, error: PjskError):
@@ -412,6 +435,7 @@ class PjskApp:
                 self.controller.app_start("com.sega.pjsekai")
             time.sleep(5.0)
         except Exception as e:
+            _debug_exception(e)
             logger.error("Force restart failed: %s", e)
 
     def _recovery_navigate_back(self):
@@ -422,6 +446,7 @@ class PjskApp:
                 self.controller.shell("input keyevent 4")
             time.sleep(1.0)
         except Exception as e:
+            _debug_exception(e)
             logger.error("Navigate back failed: %s", e)
 
     def _recovery_wait_reconnect(self, retry_delay: float, max_retries: int):
@@ -445,6 +470,7 @@ class PjskApp:
             t.start()
             logger.info("Web server started on port %d", port)
         except Exception as e:
+            _debug_exception(e)
             logger.warning("Web server failed: %s", e)
 
     def _format_uptime(self) -> str:

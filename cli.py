@@ -20,23 +20,20 @@ import os
 import sys
 import time
 
+from logging_utils import setup_logging as configure_logging
+
 # 确保项目根目录在 path 中
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 
-def setup_logging(level: str = "INFO"):
-    """配置日志, 带健全的 level 回退。"""
-    try:
-        log_level = getattr(logging, level.upper())
-    except AttributeError:
-        log_level = logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+def setup_logging(level: str | None = None, profile: str = ""):
+    """配置日志, 优先使用 profile 中的 logging 配置。"""
+    from config import load_config
+
+    cfg = load_config(profile)
+    return configure_logging(cfg, level=level)
 
 
 def cmd_start(args):
@@ -243,6 +240,7 @@ def main():
     )
 
     parser.add_argument("--profile", "-p", default="", help="配置档案名")
+    parser.add_argument("--log-level", default=None, help="覆盖日志级别 (DEBUG/INFO/WARNING/ERROR)")
     parser.add_argument("--version", "-v", action="store_true", help="显示版本")
 
     subparsers = parser.add_subparsers(dest="command", help="子命令")
@@ -304,7 +302,7 @@ def main():
         parser.print_help()
         return
 
-    setup_logging()
+    setup_logging(level=args.log_level, profile=args.profile)
     args.func(args)
 
 

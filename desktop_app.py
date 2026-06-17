@@ -32,6 +32,9 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 
+from config import load_config
+from logging_utils import setup_logging as configure_logging
+
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -288,6 +291,7 @@ def run_desktop(
     auto_start: bool = False,
     force_wizard: bool = False,
     skip_browser: bool = False,
+    log_level: str | None = None,
 ):
     """桌面模式主入口。
 
@@ -297,7 +301,11 @@ def run_desktop(
         auto_start: 是否自动开始执行
         force_wizard: 是否强制显示设置向导
         skip_browser: 是否跳过打开浏览器
+        log_level: 可选的日志级别覆盖
     """
+    cfg = load_config()
+    configure_logging(cfg, level=log_level)
+
     print_banner()
 
     # 首次运行检测
@@ -432,14 +440,9 @@ def main():
     parser.add_argument("--wizard", action="store_true", help="强制显示设置向导")
     parser.add_argument("--start", action="store_true", help="自动开始执行")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    parser.add_argument("--log-level", default=None, help="覆盖日志级别 (DEBUG/INFO/WARNING/ERROR)")
 
     args = parser.parse_args()
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
     run_desktop(
         port=args.port,
@@ -447,6 +450,7 @@ def main():
         auto_start=args.start,
         force_wizard=args.wizard,
         skip_browser=args.no_browser,
+        log_level=args.log_level,
     )
 
 

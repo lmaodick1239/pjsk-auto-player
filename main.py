@@ -32,6 +32,17 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 
+def _extract_log_level(argv: list[str]) -> str | None:
+    try:
+        index = argv.index("--log-level")
+    except ValueError:
+        return None
+
+    if index + 1 < len(argv):
+        return argv[index + 1]
+    return None
+
+
 def main():
     """入口函数。
 
@@ -49,13 +60,13 @@ def main():
     # desktop → Web 桌面模式
     if sys.argv[1] == "desktop":
         from desktop_app import run_desktop
-        run_desktop()
+        run_desktop(log_level=_extract_log_level(sys.argv[2:]))
         return
 
     # gui → 原生 GUI
     if sys.argv[1] == "gui":
         from native_gui import PjskGui
-        gui = PjskGui()
+        gui = PjskGui(log_level=_extract_log_level(sys.argv[2:]))
         gui.run()
         return
 
