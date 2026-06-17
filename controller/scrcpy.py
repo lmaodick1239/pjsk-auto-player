@@ -162,32 +162,31 @@ class ScrcpyController(BaseController):
     # ── Scrcpy Stream ──────────────────────────────────────────
 
     def _start_scrcpy(self) -> bool:
-        """Launch scrcpy in PPM output mode."""
+        """Launch scrcpy with a specific window title and start window capture."""
         cmd = [self.executable]
 
         if self.serial:
             cmd += ["-s", self.serial]
 
-        # PPM mode: raw pixel data over stdout
+        # Use a unique window title to easily find the window
+        self._window_title = f"pjsk_scrcpy_{int(time.time())}"
+        
         max_size = int(1080 * self._scale)
         cmd += [
-            "--no-window",
-            "--no-control",
-            "--output-format=ppm",
+            "--window-title", self._window_title,
             "--max-fps", str(self._max_fps),
             "--max-size", str(max_size),
             "--video-bit-rate", str(self._bit_rate),
         ]
 
-        logger.info("Starting scrcpy PPM stream: max_fps=%d, scale=%.1f, max_size=%d",
+        logger.info("Starting scrcpy window: max_fps=%d, scale=%.1f, max_size=%d",
                     self._max_fps, self._scale, max_size)
 
         try:
             self._process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                bufsize=0,
             )
         except FileNotFoundError:
             logger.error("scrcpy not found — install via 'brew install scrcpy' (macOS) "
@@ -198,12 +197,10 @@ class ScrcpyController(BaseController):
             return False
 
         self._running = True
-        self._buffer = b""
-        self._state = "header"
         self._reader_thread = threading.Thread(
             target=self._read_loop,
             daemon=True,
-            name="scrcpy-ppm-reader",
+            name="scrcpy-window-capture",
         )
         self._reader_thread.start()
 
@@ -215,10 +212,10 @@ class ScrcpyController(BaseController):
                     h, w = self._latest_frame.shape[:2]
                     self._screen_width = w
                     self._screen_height = h
-                    logger.info("scrcpy PPM stream started: %dx%d", w, h)
+                    logger.info("scrcpy window capture started: %dx%d", w, h)
                     return True
 
-        logger.warning("scrcpy PPM start timeout (no frame received in 2s)")
+        logger.warning("scrcpy start timeout (no frame captured in 2s)")
         self._running = False
         if self._process:
             self._process.terminate()
@@ -226,91 +223,61 @@ class ScrcpyController(BaseController):
         return False
 
     def _read_loop(self):
-        """Background thread: continuously read and parse PPM frames from scrcpy stdout."""
-        assert self._process is not None
-        assert self._process.stdout is not None
-
-        while self._running:
-            try:
-                chunk = self._process.stdout.read(65536)
-            except Exception:
-                break
-
-            if not chunk:
-                logger.info("scrcpy PPM stream ended")
-                break
-
-            self._buffer += chunk
-            self._parse_buffer()
-
-        logger.info("scrcpy PPM reader thread exited")
-
-    def _parse_buffer(self):
-        """Parse PPM frames from the accumulation buffer.
-
-        PPM format: "P6\\n<width> <height>\\n255\\n" followed by W×H×3 RGB bytes.
-        """
-        # v5.4: buffer 上限保护 — 超过时丢弃并重置解析器
-        if len(self._buffer) > self._max_buffer_bytes:
-            logger.warning("PPM buffer overflow (%d bytes), resetting parser",
-                           len(self._buffer))
-            self._buffer = b""
-            self._state = "header"
+        """Background thread: continuously capture the scrcpy window using mss."""
+        import cv2
+        try:
+            import mss
+            import pygetwindow as gw
+        except ImportError:
+            logger.error("mss or pygetwindow not installed. Please run 'pip install mss pygetwindow'.")
             return
 
-        while True:
-            if self._state == "header":
-                # Find "P6\n"
-                first_nl = self._buffer.find(b"\n")
-                if first_nl < 0:
+        with mss.mss() as sct:
+            window = None
+            # Wait up to 5 seconds for the window to appear
+            for _ in range(50):
+                windows = gw.getWindowsWithTitle(self._window_title)
+                if windows:
+                    window = windows[0]
                     break
-                rest = self._buffer[first_nl + 1:]
+                time.sleep(0.1)
+                
+            if not window:
+                logger.error("Could not find scrcpy window.")
+                return
+                
+            while self._running:
+                try:
+                    # Ignore if window is minimized
+                    if window.isMinimized:
+                        time.sleep(0.1)
+                        continue
+                        
+                    # Get the window rect
+                    # Depending on OS/theme, borders might be included. For accurate gameplay, borderless is preferred.
+                    # We just capture the bounding box for now.
+                    rect = {"left": window.left, "top": window.top, "width": window.width, "height": window.height}
+                    
+                    if rect["width"] <= 0 or rect["height"] <= 0:
+                        time.sleep(0.1)
+                        continue
 
-                # Find second newline (dimension line)
-                second_nl = rest.find(b"\n")
-                if second_nl < 0:
-                    break
+                    # Capture using mss
+                    sct_img = sct.grab(rect)
+                    
+                    # Convert to numpy array (BGRA to BGR)
+                    img = np.array(sct_img)
+                    bgr = img[:, :, :3]
+                    
+                    with self._frame_lock:
+                        self._latest_frame = bgr
+                        
+                except Exception as e:
+                    logger.warning("Window capture error: %s", e)
+                    time.sleep(0.1)
 
-                dims = rest[:second_nl].decode(errors="replace").strip()
-                parts = dims.split()
-                if len(parts) >= 2:
-                    try:
-                        self._ppm_width = int(parts[0])
-                        self._ppm_height = int(parts[1])
-                    except ValueError:
-                        pass
-
-                remaining = rest[second_nl + 1:]
-                third_nl = remaining.find(b"\n")
-                if third_nl < 0:
-                    break
-
-                data_start = first_nl + 1 + second_nl + 1 + third_nl + 1
-                self._ppm_data_size = self._ppm_width * self._ppm_height * 3
-                self._state = "data"
-                self._buffer = self._buffer[data_start:]
-
-            if self._state == "data":
-                if len(self._buffer) < self._ppm_data_size:
-                    break
-
-                frame_data = self._buffer[:self._ppm_data_size]
-
-                # PPM is RGB → convert to BGR for OpenCV
-                rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape(
-                    self._ppm_height, self._ppm_width, 3,
-                )
-                bgr = rgb[:, :, ::-1]
-
-                with self._frame_lock:
-                    self._latest_frame = bgr
-
-                # Remove consumed data, reset to header state
-                self._buffer = self._buffer[self._ppm_data_size:]
-                self._state = "header"
-                continue
-
-            break
+                time.sleep(1.0 / self._max_fps)
+        logger.info("scrcpy window capture thread exited")
 
     # ── Screencap ──────────────────────────────────────────────
 

@@ -78,7 +78,7 @@ class ScrcpyController:
             return exe
 
     def start(self) -> bool:
-        """启动 scrcpy PPM 视频流。返回是否成功。"""
+        """Launch scrcpy with a specific window title and start window capture."""
         if self._running:
             return True
 
@@ -86,33 +86,28 @@ class ScrcpyController:
         bit_rate = self.cfg.get("bit_rate", 8000000)
         scale = self.cfg.get("scale", 0.5)
 
-        # PPM 模式: 输出原始像素数据, 无需编解码
         cmd = [self.executable]
 
         if self.serial:
             cmd += ["-s", self.serial]
 
-        # --no-window: 不显示窗口
-        # --no-control: 不处理输入
-        # --output-format=ppm: 输出 PPM 格式 (关键!)
-        # --max-fps: 限制帧率
+        # Use a unique window title to easily find the window
+        self._window_title = f"pjsk_scrcpy_{int(time.time())}"
+
         cmd += [
-            "--no-window",
-            "--no-control",
-            "--output-format=ppm",
+            "--window-title", self._window_title,
             "--max-fps", str(max_fps),
             "--max-size", str(int(1080 * scale)),
             "--video-bit-rate", str(bit_rate),
         ]
 
-        logger.info(f"启动 scrcpy PPM 流: max_fps={max_fps}, scale={scale}")
+        logger.info(f"启动 scrcpy 窗口捕获: max_fps={max_fps}, scale={scale}")
 
         try:
             self._process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                bufsize=0,  # 无缓冲
             )
         except FileNotFoundError:
             logger.error("scrcpy 未安装")
@@ -125,143 +120,79 @@ class ScrcpyController:
         self._reader_thread = threading.Thread(
             target=self._read_loop,
             daemon=True,
-            name="scrcpy-ppm-reader"
+            name="scrcpy-window-capture"
         )
         self._reader_thread.start()
 
         # 等待首帧
-        for _ in range(100):
+        for _ in range(200):
             time.sleep(0.01)
             with self._lock:
                 if self._latest_frame is not None:
                     h, w = self._latest_frame.shape[:2]
-                    logger.info(f"scrcpy PPM 已启动: {w}x{h} @ {max_fps}FPS")
+                    logger.info(f"scrcpy 窗口捕获已启动: {w}x{h} @ {max_fps}FPS")
                     return True
 
-        logger.warning("scrcpy PPM 启动超时 (未收到帧)")
+        logger.warning("scrcpy 启动超时 (未捕获到帧)")
         self.stop()
         return False
 
     def _read_loop(self):
-        """
-        后台线程: 读取 scrcpy stdout 的 PPM 数据流。
+        """后台线程: 持续捕获 scrcpy 窗口。"""
+        import cv2
+        try:
+            import mss
+            import pygetwindow as gw
+        except ImportError:
+            logger.error("未安装 mss 或 pygetwindow。请运行 'pip install mss pygetwindow'")
+            return
 
-        PPM 格式:
-          Header: "P6\\n<width> <height>\\n255\\n"
-          Data:   width × height × 3 bytes (RGB)
-        """
-        self._buffer = b""
-        self._state = "header"
-
-        while self._running and self._process and self._process.stdout:
-            try:
-                chunk = self._process.stdout.read(65536)
-            except Exception:
-                break
-
-            if not chunk:
-                logger.info("scrcpy PPM 流结束")
-                break
-
-            self._buffer += chunk
-            self._parse_buffer()
-
-        logger.info("scrcpy PPM 读取线程已退出")
-
-    def _parse_buffer(self):
-        """
-        从缓冲区解析 PPM 帧 (v5.2 优化: 一行式 header 解析 + 批量处理)。
-
-        PPM P6 格式:
-          Header: "P6\n<width> <height>\n255\n"
-          Data:   width × height × 3 bytes (RGB)
-
-        优化: 使用 splitlines() 一次性解析 header,
-              避免多次 find() 调用和 byte 切片操作。
-        """
-        while True:
-            if self._state == "header":
-                # 检查是否有完整的 header (至少需要 3 行)
-                lines = self._buffer.split(b"\n", 3)
-                if len(lines) < 4:
-                    break  # header 不完整, 等待更多数据
-
-                # P6
-                if lines[0].strip() != b"P6":
-                    # 无效格式, 跳过这个字节重新扫描
-                    self._buffer = self._buffer[1:]
-                    continue
-
-                # 解析尺寸 "W H"
-                try:
-                    dims = lines[1].strip().decode("ascii")
-                    parts = dims.split()
-                    self._ppm_width = int(parts[0])
-                    self._ppm_height = int(parts[1])
-                except (ValueError, UnicodeDecodeError, IndexError):
-                    self._buffer = self._buffer[1:]
-                    continue
-
-                # 验证最大值行 (通常为 "255")
-                # 可能包含注释, 跳过多余头部行
-                max_val_line = lines[2].strip()
-                if max_val_line.startswith(b"#"):
-                    # 罕见: PPM 带注释行, 继续向后扫描
-                    extended = self._buffer.split(b"\n", 5)
-                    if len(extended) >= 5:
-                        max_val_line = extended[4].strip()
-                    else:
-                        break
-                # 容忍非标准值 (如 "255" 但可能有空格)
-
-                # 计算 data 在 buffer 中的偏移
-                # 前 3 行的总字节数 = 3 个分隔符 + 各自内容
-                header_end = (len(lines[0]) + len(lines[1]) + len(lines[2])
-                              + 3)  # 3 个 \n
-                self._ppm_data_size = self._ppm_width * self._ppm_height * 3
-                self._state = "data"
-                self._buffer = self._buffer[header_end:]
-
-                # 验证数据大小合理性
-                if self._ppm_data_size <= 0 or self._ppm_data_size > 100 * 1024 * 1024:
-                    logger.warning(f"PPM 数据大小异常: {self._ppm_data_size}, 重置")
-                    self._state = "header"
-                    self._buffer = b""
+        with mss.mss() as sct:
+            window = None
+            for _ in range(50):
+                windows = gw.getWindowsWithTitle(self._window_title)
+                if windows:
+                    window = windows[0]
                     break
+                time.sleep(0.1)
 
-            if self._state == "data":
-                if len(self._buffer) < self._ppm_data_size:
-                    break  # 数据还不够
+            if not window:
+                logger.error("无法找到 scrcpy 窗口")
+                return
 
-                # 取出一帧
-                frame_data = self._buffer[:self._ppm_data_size]
+            while self._running:
+                try:
+                    if window.isMinimized:
+                        time.sleep(0.1)
+                        continue
 
-                # PPM 是 RGB, OpenCV 需要 BGR
-                rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape(
-                    self._ppm_height, self._ppm_width, 3
-                )
-                # RGB → BGR (使用视图操作加速)
-                bgr = rgb[:, :, ::-1].copy()
+                    rect = {"left": window.left, "top": window.top, "width": window.width, "height": window.height}
 
-                with self._lock:
-                    self._latest_frame = bgr
-                    self._frame_count += 1
+                    if rect["width"] <= 0 or rect["height"] <= 0:
+                        time.sleep(0.1)
+                        continue
 
-                    # FPS 统计
-                    now = time.time()
-                    if now - self._last_fps_time >= 1.0:
-                        self._fps = self._frame_count / (now - self._last_fps_time)
-                        self._frame_count = 0
-                        self._last_fps_time = now
+                    sct_img = sct.grab(rect)
+                    img = np.array(sct_img)
+                    bgr = img[:, :, :3]
 
-                # 移除已处理的数据, 保留可能的下一帧头部
-                self._buffer = self._buffer[self._ppm_data_size:]
-                self._state = "header"
+                    with self._lock:
+                        self._latest_frame = bgr
+                        self._frame_count += 1
+                        
+                        now = time.time()
+                        if now - self._last_fps_time >= 1.0:
+                            self._fps = self._frame_count / (now - self._last_fps_time)
+                            self._frame_count = 0
+                            self._last_fps_time = now
 
-                # 继续循环, buffer 中可能已有下一帧
-                continue
+                except Exception as e:
+                    logger.warning(f"窗口捕获错误: {e}")
+                    time.sleep(0.1)
 
-            break
+                time.sleep(1.0 / self.cfg.get("max_fps", 60))
+
+        logger.info("scrcpy 窗口捕获线程已退出")
 
     def get_frame(self) -> Optional[np.ndarray]:
         """

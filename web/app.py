@@ -275,8 +275,6 @@ class WebHandler(BaseHTTPRequestHandler):
         if _app_instance:
             s["current_task"] = getattr(_app_instance, "current_task", "")
             s["mode"] = getattr(_app_instance, "mode", "")
-        elif self.app:
-            s.update(self.app.get_status())
         return s
 
     def _get_screenshot(self) -> dict:
